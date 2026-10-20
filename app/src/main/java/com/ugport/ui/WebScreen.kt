@@ -645,19 +645,62 @@ private val PAGE_INFO_SCRIPT = """
           try { window.dispatchEvent(new Event('resize')); } catch (e) {}
           return document.body.getBoundingClientRect().height > 0 ? 'fixed' : 'fail';
         }
-        var bodyBroken = !!(document.body && vh > 0 && document.body.getBoundingClientRect().height < vh * 0.5);
-        var bodyFix = repairBodyHeight();
-        var vhUnit = 'n/a', dvh = 'n/a';
-        if (bodyBroken) {
+        // 该 WebView 里 vh/dvh 可能全部算成 0（实测 Android 16 / WebView 143）。
+        // 受影响页面会把 height:100vh 的布局容器压成 0，只剩文字不出界面。
+        function measureUnit(prop){
           var probe = document.createElement('div');
           probe.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;';
           document.documentElement.appendChild(probe);
-          probe.style.height = '100vh';
-          vhUnit = probe.getBoundingClientRect().height;
-          probe.style.height = '100dvh';
-          dvh = probe.getBoundingClientRect().height;
+          probe.style.height = prop;
+          var value = probe.getBoundingClientRect().height;
           document.documentElement.removeChild(probe);
+          return value;
         }
+        function fixVhUnits(height){
+          var count = 0;
+          function convert(value){
+            return value.replace(/([0-9.]+)(dvh|svh|lvh|vh)/g, function(m, num){
+              return (parseFloat(num) * height / 100) + 'px';
+            });
+          }
+          function walk(rules){
+            for (var i = 0; i < rules.length; i++) {
+              var r = rules[i];
+              if (r.style) {
+                var props = ['height', 'minHeight', 'maxHeight'];
+                for (var p = 0; p < props.length; p++) {
+                  var v = r.style[props[p]];
+                  if (v && /(dvh|svh|lvh|vh)/.test(v)) {
+                    try { r.style[props[p]] = convert(v); count++; } catch (e) {}
+                  }
+                }
+              }
+              // Chrome 支持 CSS 嵌套，CSSStyleRule 也有 cssRules，不能据此跳过 style
+              if (r.cssRules && r.cssRules.length) walk(r.cssRules);
+            }
+          }
+          for (var i = 0; i < document.styleSheets.length; i++) {
+            try { var rules = document.styleSheets[i].cssRules; if (rules) walk(rules); } catch (e) {}
+          }
+          // 内联 style 里的 vh 也一并换算
+          var inline = document.querySelectorAll('[style*="vh"]');
+          for (var j = 0; j < inline.length; j++) {
+            var props2 = ['height', 'minHeight', 'maxHeight'];
+            for (var k = 0; k < props2.length; k++) {
+              var iv = inline[j].style[props2[k]];
+              if (iv && /(dvh|svh|lvh|vh)/.test(iv)) {
+                try { inline[j].style[props2[k]] = convert(iv); count++; } catch (e) {}
+              }
+            }
+          }
+          return count;
+        }
+        var vhUnit = measureUnit('100vh');
+        var dvh = measureUnit('100dvh');
+        var vhFix = 0;
+        if (vhUnit === 0) vhFix = fixVhUnits(vh);
+        var bodyBroken = !!(document.body && vh > 0 && document.body.getBoundingClientRect().height < vh * 0.5);
+        var bodyFix = repairBodyHeight();
         var e = document.elementFromPoint(vw / 2, vh / 2);
         var first = document.body && document.body.firstElementChild;
         // 前 3 层、最多 12 个节点的尺寸，便于定位“只显示一部分”的页面
@@ -679,6 +722,7 @@ private val PAGE_INFO_SCRIPT = """
           scroll: [window.scrollX, window.scrollY],
           bodyFix: bodyFix,
           repaired: repaired,
+          vhFix: vhFix,
           vh: vhUnit,
           dvh: dvh,
           rootRect: rectOf(document.documentElement),
