@@ -1,6 +1,8 @@
 package com.ugport.util
 
 import android.net.Uri
+import com.ugport.data.model.NasProfile
+import java.net.URI
 
 object UrlTools {
 
@@ -90,10 +92,37 @@ object UrlTools {
         return host.startsWith("app-") && host.endsWith(".ugdocker.link")
     }
 
-    fun isLoginUrl(url: String?): Boolean {
+    /** NAS 的 UGOS 登录域名，例如 my-nas.xx.ug.link。 */
+    fun loginHost(nas: NasProfile): String? {
+        val connectionId = normalizeConnectionId(
+            nas.connectionId.ifBlank { parseConnectionId(nas.baseUrl) }
+        )
+        if (connectionId.isBlank()) return null
+        val relay = nas.relayDomain ?: parseRelayDomain(nas.baseUrl)
+        if (relay.isNullOrBlank()) return null
+        return "$connectionId.$relay"
+    }
+
+    /**
+     * 只把 UGOS 自己的登录页当作登录页。
+     * 容器端口（*.ugdocker.link）与第三方应用的 /login 路由一律排除，
+     * 否则会误触发 NAS 重新登录（开启 OTP 的账号会被弹二次验证）。
+     */
+    fun isUgreenLoginUrl(url: String?, loginHost: String?): Boolean {
         if (url.isNullOrBlank()) return false
-        val lower = url.lowercase()
-        return lower.contains("/login") || lower.contains("#/login")
+        val uri = runCatching { URI(normalizeTargetUrl(url)) }.getOrNull() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        if (host.endsWith(".ugdocker.link")) return false
+        if (!loginHost.isNullOrBlank()) {
+            if (!host.equals(loginHost.lowercase())) return false
+        } else if (!host.endsWith(".ug.link")) {
+            return false
+        }
+        val path = uri.path?.lowercase().orEmpty()
+        val fragment = uri.fragment?.lowercase().orEmpty()
+        if (path.startsWith("/ugreen")) return true
+        if (path.startsWith("/desktop") && fragment.contains("login")) return true
+        return fragment.contains("/login")
     }
 
     fun defaultAppendUid(url: String): Boolean {

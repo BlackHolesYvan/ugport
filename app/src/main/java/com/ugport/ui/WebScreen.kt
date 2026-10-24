@@ -253,23 +253,32 @@ fun WebScreen(
                                         scheduleHeightFollowUp(view, url)
                                     }
                                     val current = currentTarget.value
-                                    val baseUrl = viewModel.repo.nas(current.nasId)?.baseUrl
+                                    val nas = viewModel.repo.nas(current.nasId)
+                                    val baseUrl = nas?.baseUrl
                                     if (!WebViewConfigurator.isTrustedHost(Uri.parse(url).host, baseUrl)) return
+                                    val relayHost = nas?.let { UrlTools.loginHost(it) }
 
-                                    if (UrlTools.isLoginUrl(url)) {
+                                    if (UrlTools.isUgreenLoginUrl(url, relayHost)) {
                                         // 先尝试原生重新授权；失败或需要 OTP 时再由页面处理
+                                        viewModel.diagnostics.log(
+                                            "web: ugos login page detected ${viewModel.diagnostics.redactUrl(url)}"
+                                        )
                                         viewModel.onLoginPageDetected(currentTarget.value)
                                         if (lastAutoFill != url && autoFillCount < 3) {
                                             lastAutoFill = url
                                             autoFillCount++
                                             // 原生重授权通常 1-2 秒完成；4 秒后仍停在登录页再自动填充
                                             view.postDelayed({
-                                                if (!viewModel.busy && viewModel.otpPrompt == null && UrlTools.isLoginUrl(view.url)) {
+                                                if (!viewModel.busy && viewModel.otpPrompt == null &&
+                                                    UrlTools.isUgreenLoginUrl(view.url, relayHost)
+                                                ) {
                                                     fillCredentials()
                                                 }
                                             }, 4000L)
                                             view.postDelayed({
-                                                if (!viewModel.busy && viewModel.otpPrompt == null && UrlTools.isLoginUrl(view.url)) {
+                                                if (!viewModel.busy && viewModel.otpPrompt == null &&
+                                                    UrlTools.isUgreenLoginUrl(view.url, relayHost)
+                                                ) {
                                                     fillCredentials()
                                                 }
                                             }, 8000L)
@@ -288,8 +297,16 @@ fun WebScreen(
                                 ) {
                                     super.doUpdateVisitedHistory(view, url, isReload)
                                     if (view == null || url == null) return
-                                    if (UrlTools.isLoginUrl(url)) {
-                                        viewModel.onLoginPageDetected(currentTarget.value)
+                                    val current = currentTarget.value
+                                    val nas = viewModel.repo.nas(current.nasId)
+                                    val baseUrl = nas?.baseUrl
+                                    if (!WebViewConfigurator.isTrustedHost(Uri.parse(url).host, baseUrl)) return
+                                    val relayHost = nas?.let { UrlTools.loginHost(it) }
+                                    if (UrlTools.isUgreenLoginUrl(url, relayHost)) {
+                                        viewModel.diagnostics.log(
+                                            "web: ugos login page detected ${viewModel.diagnostics.redactUrl(url)}"
+                                        )
+                                        viewModel.onLoginPageDetected(current)
                                     } else {
                                         view.evaluateJavascript(LoginScripts.extractToken(), null)
                                     }
