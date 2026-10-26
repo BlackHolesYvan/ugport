@@ -92,6 +92,8 @@ fun WebScreen(
     var autoFillCount by remember { mutableIntStateOf(0) }
     // 同一 URL 只做一次「清缓存重载」，避免空白页无限循环
     var blankRetriedUrl by remember { mutableStateOf<String?>(null) }
+    // 页面骨架加载完成但一直没有文字时，自动重载一次（并发 chunk 请求可能被代理挂起）
+    var stallRetriedUrl by remember { mutableStateOf<String?>(null) }
     // 外部链接：待用户选择的目标，以及选择「应用内」后放行一次的 URL
     var pendingLink by remember { mutableStateOf<Uri?>(null) }
     var pendingInternal by remember { mutableStateOf<String?>(null) }
@@ -151,6 +153,22 @@ fun WebScreen(
                 }
             }
         }, BLANK_CHECK_DELAY_MS)
+    }
+
+    /** 页面 6 秒后仍然没有任何文字时重载一次，缓解动态 chunk 请求被连接挂起的问题。 */
+    fun scheduleStallReload(view: WebView, url: String) {
+        if (stallRetriedUrl == url) return
+        view.postDelayed({
+            if (view.url == url && stallRetriedUrl != url) {
+                view.evaluateJavascript(STALL_SCRIPT) { result ->
+                    if (result?.trim('"') == "stall") {
+                        stallRetriedUrl = url
+                        viewModel.diagnostics.log("web: page stalled (no text), reload once")
+                        view.reload()
+                    }
+                }
+            }
+        }, 6000L)
     }
 
     /**
@@ -251,6 +269,7 @@ fun WebScreen(
                                         }
                                         scheduleBlankCheck(view, url)
                                         scheduleHeightFollowUp(view, url)
+                                        scheduleStallReload(view, url)
                                     }
                                     val current = currentTarget.value
                                     val nas = viewModel.repo.nas(current.nasId)
@@ -310,6 +329,30 @@ fun WebScreen(
                                     } else {
                                         view.evaluateJavascript(LoginScripts.extractToken(), null)
                                     }
+                                    // SPA 路由切换后新渲染的深层页面可能再次出现 vh=0 的布局，
+                                    // 这里补一次修复（延迟一次覆盖异步渲染）
+                                    view.evaluateJavascript(VH_FIX_SCRIPT) { result ->
+                                        val n = result?.trim('"')?.toIntOrNull() ?: 0
+                                        if (n > 0) viewModel.diagnostics.log("web: spa vhFix=$n")
+                                    }
+                                    view.postDelayed({
+                                        view.evaluateJavascript(VH_FIX_SCRIPT) { result ->
+                                            val n = result?.trim('"')?.toIntOrNull() ?: 0
+                                            if (n > 0) viewModel.diagnostics.log("web: spa vhFix=$n (late)")
+                                        }
+                                    }, 600L)
+                                    view.postDelayed({
+                                        view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
+                                            if (result?.trim('"') == "short") {
+                                                view.evaluateJavascript(PAGE_INFO_SCRIPT) { info ->
+                                                    viewModel.diagnostics.log(
+                                                        "web page(spa): " +
+                                                            viewModel.diagnostics.redactUrl(info.orEmpty())
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }, 800L)
                                 }
 
                                 override fun shouldOverrideUrlLoading(
@@ -355,6 +398,73 @@ fun WebScreen(
                                     }.getOrDefault(true)
                                 }
 
+                                /**
+                                 * 动态 chunk（*.async.js）在部分设备上会被 WebView 的连接层挂起，
+                                 * 既不报错也不返回。这里改用 OkHttp 拉取并回填，失败则回退给 WebView。
+                                 */
+                                override fun shouldInterceptRequest(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                ): WebResourceResponse? {
+                                    val uri = request?.url ?: return null
+                                    if (request.method != "GET") return null
+                                    val path = uri.path?.lowercase().orEmpty()
+                                    if (!path.endsWith(".async.js")) return null
+                                    val current = currentTarget.value
+                                    val baseUrl = viewModel.repo.nas(current.nasId)?.baseUrl
+                                    if (!WebViewConfigurator.isTrustedHost(uri.host, baseUrl)) return null
+                                    return try {
+                                        val builder = okhttp3.Request.Builder()
+                                            .url(uri.toString())
+                                            .header(
+                                                "User-Agent",
+                                                if (current.shortcut.desktopUa) {
+                                                    com.ugport.network.UgreenApi.DESKTOP_UA
+                                                } else {
+                                                    android.webkit.WebSettings.getDefaultUserAgent(context)
+                                                },
+                                            )
+                                            .header("Accept", "*/*")
+                                            .header("Referer", current.url)
+                                        CookieManager.getInstance().getCookie(uri.toString())
+                                            ?.let { builder.header("Cookie", it) }
+                                        val started = System.currentTimeMillis()
+                                        viewModel.httpClient.newCall(builder.build()).execute().use { resp ->
+                                            val bytes = resp.body?.bytes() ?: ByteArray(0)
+                                            val headers = resp.headers.toMultimap()
+                                                .filterKeys {
+                                                    it.lowercase() !in setOf(
+                                                        "content-encoding", "content-length",
+                                                        "transfer-encoding", "connection",
+                                                        "content-type",
+                                                    )
+                                                }
+                                                .mapValues { it.value.joinToString(", ") }
+                                            val cost = System.currentTimeMillis() - started
+                                            // 正常 chunk 不刷屏，只记录失败或明显变慢的请求
+                                            if (resp.code !in 200..299 || cost > 1500) {
+                                                viewModel.diagnostics.log(
+                                                    "web: chunk ${resp.code} ${cost}ms " +
+                                                        path.substringAfterLast('/')
+                                                )
+                                            }
+                                            WebResourceResponse(
+                                                "application/javascript",
+                                                "UTF-8",
+                                                resp.code,
+                                                if (resp.code in 200..299) "OK" else resp.message.ifBlank { "ERR" },
+                                                headers,
+                                                java.io.ByteArrayInputStream(bytes),
+                                            )
+                                        }
+                                    } catch (e: Exception) {
+                                        viewModel.diagnostics.log(
+                                            "web: fetch failed ${path.substringAfterLast('/')}: ${e.message}"
+                                        )
+                                        null
+                                    }
+                                }
+
                                 override fun onReceivedError(
                                     view: WebView?,
                                     request: WebResourceRequest?,
@@ -364,6 +474,12 @@ fun WebScreen(
                                         errorText = "页面加载失败：${error?.description ?: "未知错误"}"
                                         viewModel.diagnostics.log(
                                             "web: error ${error?.description ?: "?"} ${viewModel.diagnostics.redactUrl(request.url?.toString().orEmpty())}"
+                                        )
+                                    } else {
+                                        // 子资源加载失败是“框架出来了但页面空白”的常见原因
+                                        viewModel.diagnostics.log(
+                                            "web: resource error ${error?.description ?: "?"} " +
+                                                viewModel.diagnostics.redactUrl(request?.url?.toString().orEmpty())
                                         )
                                     }
                                 }
@@ -581,6 +697,69 @@ fun WebScreen(
     }
 }
 
+private val VH_FIX_SCRIPT = """
+    (function(){
+      try {
+        var h = window.innerHeight;
+        if (!document.body || !h) return 0;
+        // 只有 vh 真的算成 0 时才处理
+        var probe = document.createElement('div');
+        probe.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;';
+        document.documentElement.appendChild(probe);
+        probe.style.height = '100vh';
+        var unit = probe.getBoundingClientRect().height;
+        document.documentElement.removeChild(probe);
+        if (unit > 0) return 0;
+        function convert(v){
+          return v.replace(/([0-9.]+)(dvh|svh|lvh|vh)/g, function(m, n){
+            return (parseFloat(n) * h / 100) + 'px';
+          });
+        }
+        var count = 0;
+        function walk(rules){
+          for (var i = 0; i < rules.length; i++) {
+            var r = rules[i];
+            if (r.style) {
+              var props = ['height', 'minHeight', 'maxHeight'];
+              for (var p = 0; p < props.length; p++) {
+                var v = r.style[props[p]];
+                if (v && /(dvh|svh|lvh|vh)/.test(v)) {
+                  try { r.style[props[p]] = convert(v); count++; } catch (e) {}
+                }
+              }
+            }
+            if (r.cssRules && r.cssRules.length) walk(r.cssRules);
+          }
+        }
+        for (var i = 0; i < document.styleSheets.length; i++) {
+          try { var rules = document.styleSheets[i].cssRules; if (rules) walk(rules); } catch (e) {}
+        }
+        var inline = document.querySelectorAll('[style*="vh"]');
+        for (var j = 0; j < inline.length; j++) {
+          var props2 = ['height', 'minHeight', 'maxHeight'];
+          for (var k = 0; k < props2.length; k++) {
+            var iv = inline[j].style[props2[k]];
+            if (iv && /(dvh|svh|lvh|vh)/.test(iv)) {
+              try { inline[j].style[props2[k]] = convert(iv); count++; } catch (e) {}
+            }
+          }
+        }
+        if (count > 0) { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }
+        return count;
+      } catch (e) { return 0; }
+    })();
+""".trimIndent()
+
+private val STALL_SCRIPT = """
+    (function(){
+      try {
+        var b = document.body;
+        if (!b) return 'ok';
+        return (b.innerText || '').trim().length === 0 ? 'stall' : 'ok';
+      } catch (e) { return 'ok'; }
+    })();
+""".trimIndent()
+
 private val SHORT_PAGE_SCRIPT = """
     (function(){
       try {
@@ -713,21 +892,11 @@ private val PAGE_INFO_SCRIPT = """
           return count;
         }
         var vhUnit = measureUnit('100vh');
-        var dvh = measureUnit('100dvh');
         var vhFix = 0;
         if (vhUnit === 0) vhFix = fixVhUnits(vh);
         var bodyBroken = !!(document.body && vh > 0 && document.body.getBoundingClientRect().height < vh * 0.5);
         var bodyFix = repairBodyHeight();
         var e = document.elementFromPoint(vw / 2, vh / 2);
-        var first = document.body && document.body.firstElementChild;
-        // 前 3 层、最多 12 个节点的尺寸，便于定位“只显示一部分”的页面
-        var nodes = [];
-        (function walk(el, depth){
-          if (!el || depth > 2 || nodes.length >= 12) return;
-          var b = el.getBoundingClientRect();
-          nodes.push([String(el.id || el.className || el.tagName).slice(0, 30), Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)]);
-          for (var i = 0; i < el.children.length && i < 4; i++) walk(el.children[i], depth + 1);
-        })(document.body, 0);
         return JSON.stringify({
           title: document.title || '',
           body: document.body ? document.body.innerText.length : 0,
@@ -735,23 +904,15 @@ private val PAGE_INFO_SCRIPT = """
           scripts: document.scripts.length,
           width: vw,
           height: vh,
-          ua: navigator.userAgent,
-          scroll: [window.scrollX, window.scrollY],
           bodyFix: bodyFix,
           repaired: repaired,
           vhFix: vhFix,
           vh: vhUnit,
-          dvh: dvh,
-          rootRect: rectOf(document.documentElement),
           bodyRect: rectOf(document.body),
-          bodyScroll: document.body ? [document.body.scrollHeight, document.body.offsetHeight] : null,
-          firstChild: first ? [String(first.id || first.className || first.tagName).slice(0, 60), rectOf(first)] : null,
-          nodes: nodes,
-          bodyBg: document.body ? getComputedStyle(document.body).backgroundColor : '',
-          bodyColor: document.body ? getComputedStyle(document.body).color : '',
           desktop: (function(){ var d=document.getElementById('desktop'); if(!d) return null; var s=getComputedStyle(d),b=d.getBoundingClientRect(); return [s.display,s.visibility,s.opacity,b.x,b.y,b.width,b.height]; })(),
           atCenter: e ? (e.id || (typeof e.className === 'string' ? e.className : '') || e.tagName) : '',
-          text: document.body ? document.body.innerText.slice(0, 200).replace(/\s+/g, ' ') : '',
+          errors: (window.__ugErrors || []).slice(0, 5),
+          text: document.body ? document.body.innerText.slice(0, 150).replace(/\s+/g, ' ') : '',
           url: location.href
         });
       } catch (err) {

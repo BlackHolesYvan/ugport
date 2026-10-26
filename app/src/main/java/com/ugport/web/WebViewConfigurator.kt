@@ -7,11 +7,25 @@ import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.ugport.BuildConfig
 import com.ugport.network.UgreenApi
 
 object WebViewConfigurator {
+
+    private val ERROR_HOOK_SCRIPT = """
+        (function(){
+          if (window.__ugErrors) return;
+          window.__ugErrors = [];
+          window.addEventListener('error', function(e){
+            try { window.__ugErrors.push((e.message || '') + ' @' + (e.filename || '')); } catch (_) {}
+          }, true);
+          window.addEventListener('unhandledrejection', function(e){
+            try { window.__ugErrors.push('rejection: ' + e.reason); } catch (_) {}
+          });
+        })();
+    """.trimIndent()
 
     /** 系统 WebView 默认 UA（移动端），取一次即可。 */
     private var defaultUa: String? = null
@@ -49,6 +63,12 @@ object WebViewConfigurator {
         }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, false)
+        }
+        // 尽早收集页面脚本错误，便于排查“页面空白但无报错”的情况
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            runCatching {
+                WebViewCompat.addDocumentStartJavaScript(webView, ERROR_HOOK_SCRIPT, setOf("*"))
+            }
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
     }

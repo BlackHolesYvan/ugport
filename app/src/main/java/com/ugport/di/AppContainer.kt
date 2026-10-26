@@ -12,6 +12,7 @@ import com.ugport.data.store.ProfileStore
 import com.ugport.network.Diagnostics
 import com.ugport.network.HttpFactory
 import com.ugport.network.UgreenApi
+import okhttp3.OkHttpClient
 
 class AppContainer(context: Context) {
 
@@ -19,6 +20,8 @@ class AppContainer(context: Context) {
     private val cipher = KeystoreCipher()
     private val store = ProfileStore(context.applicationContext)
     private val http = HttpFactory()
+
+    val httpClient: OkHttpClient get() = http.client
 
     val repo = ProfileRepository(store, cipher)
 

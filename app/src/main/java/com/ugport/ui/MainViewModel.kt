@@ -38,6 +38,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     val repo = container.repo
     val diagnostics = container.diagnostics
+    val httpClient get() = container.httpClient
     val data: StateFlow<AppData> = repo.state
 
     var webTarget by mutableStateOf<WebTarget?>(null)
