@@ -9,6 +9,7 @@ import com.ugport.auth.UidProvider
 import com.ugport.data.crypto.KeystoreCipher
 import com.ugport.data.repo.ProfileRepository
 import com.ugport.data.store.ProfileStore
+import com.ugport.media.PlaybackHub
 import com.ugport.network.Diagnostics
 import com.ugport.network.HttpFactory
 import com.ugport.network.UgreenApi
@@ -17,6 +18,7 @@ import okhttp3.OkHttpClient
 class AppContainer(context: Context) {
 
     val diagnostics = Diagnostics()
+    val playback = PlaybackHub(context.applicationContext, diagnostics)
     private val cipher = KeystoreCipher()
     private val store = ProfileStore(context.applicationContext)
     private val http = HttpFactory()

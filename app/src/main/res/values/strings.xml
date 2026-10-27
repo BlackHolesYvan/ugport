@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">绿联快连</string>
+    <string name="notification_channel_playback">网页音频播放</string>
+    <string name="notification_channel_playback_desc">显示网页音频的播放控制</string>
+    <string name="notification_unknown_track">网页音频</string>
+    <string name="notification_play">播放</string>
+    <string name="notification_previous">上一首</string>
+    <string name="notification_next">下一首</string>
+    <string name="notification_pause">暂停</string>
+    <string name="notification_stop">停止</string>
 </resources>

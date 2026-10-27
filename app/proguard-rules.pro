@@ -8,6 +8,7 @@
 
 # WebView JS 桥：注册名与方法名由网页直接调用，不能混淆
 -keep class com.ugport.web.WebBridge { *; }
+-keep class com.ugport.web.WebMediaBridge { *; }
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }

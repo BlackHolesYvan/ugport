@@ -68,6 +68,8 @@ object WebViewConfigurator {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching {
                 WebViewCompat.addDocumentStartJavaScript(webView, ERROR_HOOK_SCRIPT, setOf("*"))
+                // 媒体探测脚本尽早注入，才能捕获页面初始化阶段的播放事件
+                WebViewCompat.addDocumentStartJavaScript(webView, MediaHookScript.inject(), setOf("*"))
             }
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)

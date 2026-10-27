@@ -97,6 +97,7 @@ fun AppRoot(container: AppContainer) {
                     cookieJar = container.cookieJar,
                     externalLinkMode = data.externalLinkMode,
                     onExternalLinkModeChange = viewModel::setExternalLinkMode,
+                    playback = container.playback,
                     onBack = { viewModel.closeWeb() },
                 )
             } else {

@@ -10,6 +10,9 @@ App 负责解析 NAS 地址、完成登录、换取访问凭证，再把页面�
 - **一键打开端口**：Docker 端口自动换取 `ugreen-proxy-token`；普通网关端口自动拼接 `uid`
 - **桌面 / 移动页面**：每个端口可单独选择「桌面版网页」
 - **链接打开方式**：外部链接可每次询问、应用内打开或交给浏览器
+- **网页音频控制**：自动识别页面里的音频/视频，通知栏、锁屏、蓝牙耳机可播放/暂停/拖动进度
+- **上一首 / 下一首**：优先使用页面注册的 MediaSession 切歌回调（Navidrome、Jellyfin 等）；未注册时回退到播放器自带的上一章/下一章按钮（Ting Reader 等）
+- **后台续播**：切到后台或息屏后继续播放（按返回键离开端口页会停止）
 - **诊断日志**：一键复制，便于排查登录与页面问题
 
 ## 兼容性
@@ -74,6 +77,8 @@ keyPassword=你的密码
    再由原生请求取出 `ugreen-proxy-token` 写入 CookieManager
 4. 普通网关端口：`GET /ugreen/v1/docker/app/GetUid`，把 `uid` 拼到 URL
 5. WebView 加载页面；token 失效或落到登录页时，自动重新授权一次
+6. 页面脚本上报音频播放状态，App 启动前台服务并注册 MediaSession，
+   由系统媒体控件控制页面的播放/暂停/进度
 
 ## 隐私与安全
 
@@ -87,6 +92,13 @@ keyPassword=你的密码
 - 页面渲染依赖系统 WebView，不同厂商的 WebView 版本可能存在差异
 - 部分 WebUI 只有桌面布局，建议在端口配置中开启「桌面版网页」
 - 页面高度异常时会自动修复一次；仍空白时可在设置中清 Cookie 后重试
+- 上一首/下一首优先走页面注册的 MediaSession `nexttrack`/`previoustrack`；未注册时回退到播放器自带的 `lucide-skip-back/forward` 按钮（Ting Reader 等）；两者都没有时自动隐藏
+- MediaSession 模式下的直播流（duration 为 Infinity）不显示切歌按钮；DOM 按钮回退不受此限制
+- DOM 回退依赖页面图标类名，页面改版后可能失效
+- MediaSession 只在 HTTPS 等安全上下文可用；HTTP 页面仍可通过 DOM 按钮回退控制上一首/下一首
+- 按返回键离开端口页会销毁 WebView，播放随之停止；Home 键、锁屏、切换 App 不受影响
+- 音频能否播放取决于系统 WebView 的编解码能力，ALAC/APE/WMA/DSD 等格式需要服务端转码
+- Android 13+ 需要允许通知权限，否则通知栏与锁屏媒体控件不可见
 
 ## 目录结构
 
@@ -103,4 +115,4 @@ app/src/main/java/com/ugport/
 
 ## 版本
 
-0.2.0
+0.3.2

@@ -1,10 +1,13 @@
 package com.ugport.ui
 
+import android.Manifest
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -21,6 +24,10 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -62,10 +69,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
+import com.ugport.media.PlaybackHub
+import com.ugport.media.WebMediaController
 import com.ugport.network.HttpFactory
 import com.ugport.util.UrlTools
 import com.ugport.web.LoginScripts
+import com.ugport.web.MediaHookScript
 import com.ugport.web.WebBridge
+import com.ugport.web.WebMediaBridge
 import com.ugport.web.WebViewConfigurator
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -78,12 +89,16 @@ fun WebScreen(
     cookieJar: HttpFactory.MemoryCookieJar,
     externalLinkMode: String,
     onExternalLinkModeChange: (String) -> Unit,
+    playback: PlaybackHub,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentTarget = rememberUpdatedState(target)
     val desktopUa = target.shortcut.desktopUa
     var webView by remember { mutableStateOf<WebView?>(null) }
+    // 只用于 dispose 时精确解绑，避免误清新页面的控制器
+    val mediaControllerHolder = remember { arrayOfNulls<WebMediaController>(1) }
     var progress by remember { mutableIntStateOf(0) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var fileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
@@ -109,6 +124,30 @@ fun WebScreen(
         )
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.diagnostics.log("web: notification permission granted=$granted")
+    }
+
+    fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        val prefs = context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("notification_asked", false)) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        prefs.edit().putBoolean("notification_asked", true).apply()
+        runCatching {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }.onFailure {
+            viewModel.diagnostics.log("web: notification permission launch failed")
+        }
+    }
+
     fun fillCredentials() {
         val current = currentTarget.value
         val credentials = viewModel.credentialsFor(current.nasId) ?: return
@@ -125,6 +164,7 @@ fun WebScreen(
     fun scheduleBlankCheck(view: WebView, url: String) {
         if (blankRetriedUrl == url) return
         view.postDelayed({
+            if (playback.isPlaying) return@postDelayed
             if (view.url == url && blankRetriedUrl != url) {
                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { result ->
                     val blank = result?.trim('"') == "blank"
@@ -134,6 +174,7 @@ fun WebScreen(
                     if (blank) {
                         // 给前端留出初始化时间，二次确认后再动缓存
                         view.postDelayed({
+                            if (playback.isPlaying) return@postDelayed
                             if (view.url == url && blankRetriedUrl != url) {
                                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { second ->
                                     val stillBlank = second?.trim('"') == "blank"
@@ -159,6 +200,7 @@ fun WebScreen(
     fun scheduleStallReload(view: WebView, url: String) {
         if (stallRetriedUrl == url) return
         view.postDelayed({
+            if (playback.isPlaying) return@postDelayed
             if (view.url == url && stallRetriedUrl != url) {
                 view.evaluateJavascript(STALL_SCRIPT) { result ->
                     if (result?.trim('"') == "stall") {
@@ -244,6 +286,23 @@ fun WebScreen(
                                 },
                                 "UgBridge",
                             )
+                            val mediaController = object : WebMediaController {
+                                override fun evaluate(script: String) {
+                                    post { runCatching { evaluateJavascript(script, null) } }
+                                }
+
+                                override fun isTrustedPage(): Boolean {
+                                    val baseUrl = viewModel.repo.nas(currentTarget.value.nasId)?.baseUrl
+                                    val host = runCatching { Uri.parse(url) }.getOrNull()?.host
+                                    return WebViewConfigurator.isTrustedHost(host, baseUrl)
+                                }
+                            }
+                            mediaControllerHolder[0] = mediaController
+                            playback.attach(mediaController)
+                            addJavascriptInterface(
+                                WebMediaBridge { json -> playback.onJsState(json) },
+                                "UgMedia",
+                            )
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(
                                     view: WebView?,
@@ -251,6 +310,7 @@ fun WebScreen(
                                     favicon: Bitmap?,
                                 ) {
                                     super.onPageStarted(view, url, favicon)
+                                    playback.onPageStarted()
                                     progress = 10
                                     if (url != null) {
                                         if (url == pendingInternal) pendingInternal = null
@@ -266,6 +326,14 @@ fun WebScreen(
                                         viewModel.diagnostics.log("web: finish ${viewModel.diagnostics.redactUrl(url)}")
                                         view.evaluateJavascript(PAGE_INFO_SCRIPT) { result ->
                                             viewModel.diagnostics.log("web page: ${viewModel.diagnostics.redactUrl(result.orEmpty())}")
+                                        }
+                                        playback.onPageLoaded()
+                                        view.post {
+                                            view.evaluateJavascript("window.__ugMediaVersion === 3") { result ->
+                                                viewModel.diagnostics.log(
+                                                    "web: media hook=" + (result?.trim('"') ?: "?")
+                                                )
+                                            }
                                         }
                                         scheduleBlankCheck(view, url)
                                         scheduleHeightFollowUp(view, url)
@@ -508,6 +576,7 @@ fun WebScreen(
                                 ): Boolean {
                                     errorText = "WebView 渲染进程已退出，请返回重试"
                                     viewModel.diagnostics.log("web: render process gone")
+                                    playback.onRendererGone()
                                     return true
                                 }
                             }
@@ -668,6 +737,7 @@ fun WebScreen(
     }
 
     LaunchedEffect(target.url) {
+        playback.onPageStarted()
         blankRetriedUrl = null
         // 等待 AndroidView 创建 WebView；只用 target.url 作为 key，避免 WebView 状态变化导致重复准备鉴权
         val view = snapshotFlow { webView }.filterNotNull().first()
@@ -688,12 +758,28 @@ fun WebScreen(
     }
 
     DisposableEffect(Unit) {
+        playback.onPlaybackStarted = { requestNotificationPermissionIfNeeded() }
         onDispose {
+            playback.onPlaybackStarted = null
+            // 先断开媒体控制并停止前台服务，再销毁 WebView
+            playback.detach(mediaControllerHolder[0])
+            mediaControllerHolder[0] = null
             fileCallback?.onReceiveValue(null)
             fileCallback = null
             webView?.destroy()
             webView = null
         }
+    }
+
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                webView?.evaluateJavascript(MediaHookScript.probe(), null)
+                if (playback.isPlaying) requestNotificationPermissionIfNeeded()
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 }
 

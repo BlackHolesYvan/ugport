@@ -16,4 +16,11 @@ class MainActivity : ComponentActivity() {
             AppRoot(container)
         }
     }
+
+    override fun onDestroy() {
+        if (isFinishing) {
+            (application as UgPortApp).container.playback.stopAll()
+        }
+        super.onDestroy()
+    }
 }
