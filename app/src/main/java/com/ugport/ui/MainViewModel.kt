@@ -296,6 +296,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { repo.setExternalLinkMode(mode) }
     }
 
+    fun setThemeMode(mode: String) {
+        viewModelScope.launch { repo.setThemeMode(mode) }
+    }
+
     fun clearCookies() {
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
         android.webkit.CookieManager.getInstance().flush()

@@ -1,32 +1,28 @@
 package com.ugport.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -35,31 +31,50 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.ugport.BuildConfig
 import com.ugport.data.model.AppData
+import com.ugport.data.model.NasProfile
+import com.ugport.data.model.ThemeMode
 import com.ugport.network.Diagnostics
+import com.ugport.ui.components.ConfirmDialog
+import com.ugport.ui.components.GlassActionSheet
+import com.ugport.ui.components.PillOption
+import com.ugport.ui.components.SectionCard
+import com.ugport.ui.components.SegmentedPills
+import com.ugport.ui.components.SectionDivider
+import com.ugport.ui.components.SettingRow
+import com.ugport.ui.components.SheetAction
+import com.ugport.ui.components.UgScaffold
+import com.ugport.ui.components.UgTopBar
+import com.ugport.ui.theme.AppShape
 import com.ugport.util.BatteryOptimization
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     data: AppData,
     diagnostics: Diagnostics,
     onBack: () -> Unit,
     onExternalLinkModeChange: (String) -> Unit,
+    onThemeModeChange: (String) -> Unit,
     onClearCookies: () -> Unit,
     onClearSession: (String) -> Unit,
 ) {
     val lines by diagnostics.lines.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var showLinkModeDialog by remember { mutableStateOf(false) }
+    var showLinkSheet by remember { mutableStateOf(false) }
+    var pendingClear by remember { mutableStateOf<NasProfile?>(null) }
+    var confirmClearCookies by remember { mutableStateOf(false) }
     var ignoringBattery by remember { mutableStateOf(BatteryOptimization.isIgnoring(context)) }
 
     DisposableEffect(lifecycleOwner) {
@@ -73,179 +88,283 @@ fun SettingsScreen(
     }
 
     fun copyLogs() {
-        val header = "绿联快连 ${com.ugport.BuildConfig.VERSION_NAME}\n" +
-            "Android ${android.os.Build.VERSION.RELEASE} / ${android.os.Build.MODEL}\n"
+        val header = "绿联快连 " + BuildConfig.VERSION_NAME + "\n" +
+            "Android " + android.os.Build.VERSION.RELEASE + " / " + android.os.Build.MODEL + "\n"
         val text = header + lines.joinToString("\n")
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("UgPort 诊断日志", text))
         Toast.makeText(context, "日志已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
 
-    Scaffold(
+    UgScaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("设置与诊断") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-            )
+            UgTopBar(title = "设置与诊断", onBack = onBack)
         },
     ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("登录状态", style = MaterialTheme.typography.titleMedium)
-                        data.nasList.forEach { nas ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(nas.name, style = MaterialTheme.typography.bodyMedium)
-                                TextButton(onClick = { onClearSession(nas.id) }) {
-                                    Text("清除")
+                SectionCard(title = "登录状态") {
+                    if (data.nasList.isEmpty()) {
+                        SettingRow(title = "还没有 NAS", subtitle = "先在首页添加一台 NAS")
+                    }
+                    data.nasList.forEach { nas ->
+                        SettingRow(
+                            title = nas.name,
+                            subtitle = if (nas.tokenEnc.isNotBlank()) "凭证已保存" else "未登录",
+                            trailing = {
+                                TextButton(
+                                    onClick = { pendingClear = nas },
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) {
+                                    Text(
+                                        text = "清除",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
                                 }
-                            }
-                        }
-                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                        TextButton(onClick = onClearCookies) { Text("清除所有 WebView Cookie") }
-                    }
-                }
-            }
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("网页链接", style = MaterialTheme.typography.titleMedium)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("外部链接打开方式", style = MaterialTheme.typography.bodyMedium)
-                            TextButton(onClick = { showLinkModeDialog = true }) {
-                                Text(linkModeLabel(data.externalLinkMode))
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("后台播放", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (ignoringBattery) {
-                                "已允许后台运行，锁屏后不易被系统中断"
-                            } else {
-                                "未允许后台运行，锁屏后可能被系统中断"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (ignoringBattery) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.error
                             },
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { BatteryOptimization.openRequest(context) }) {
-                                Text("去设置")
-                            }
-                            TextButton(onClick = { BatteryOptimization.openAppDetails(context) }) {
-                                Text("应用详情")
-                            }
-                        }
-                        Text(
-                            "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        SectionDivider()
                     }
+                    SettingRow(
+                        title = "清除所有 WebView Cookie",
+                        subtitle = "端口页面登录态异常时使用",
+                        showChevron = true,
+                        onClick = { confirmClearCookies = true },
+                    )
                 }
             }
+
             item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("关于", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "绿联快连 ${com.ugport.BuildConfig.VERSION_NAME}\n仅在本机加密保存账号密码，用于自动登录你的 NAS。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                SectionCard(title = "网页链接") {
+                    SettingRow(
+                        title = "外部链接打开方式",
+                        value = linkModeLabel(data.externalLinkMode),
+                        showChevron = true,
+                        onClick = { showLinkSheet = true },
+                    )
                 }
             }
+
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                SectionCard(
+                    title = "外观",
+                    footer = "「自适应」跟随系统的深色模式自动切换。",
                 ) {
-                    Text(
-                        "诊断日志（${lines.size} 条）",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Row {
-                        TextButton(onClick = { copyLogs() }, enabled = lines.isNotEmpty()) {
-                            Text("复制日志")
-                        }
-                        TextButton(onClick = diagnostics::clear) { Text("清空") }
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        SegmentedPills(
+                            options = THEME_MODES,
+                            selected = ThemeMode.sanitize(data.themeMode),
+                            onSelect = onThemeModeChange,
+                        )
                     }
                 }
             }
-            if (lines.isEmpty()) {
-                item {
-                    Text(
-                        "暂无日志。打开一次端口后这里会显示登录与 GetUid 的结果。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+
+            item {
+                SectionCard(
+                    title = "后台播放",
+                    footer = "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
+                ) {
+                    SettingRow(
+                        title = if (ignoringBattery) "已允许后台运行" else "未允许后台运行",
+                        subtitle = if (ignoringBattery) {
+                            "锁屏后不易被系统中断"
+                        } else {
+                            "锁屏后可能被系统中断播放"
+                        },
+                        leading = { StatusDot(ok = ignoringBattery) },
+                    )
+                    SectionDivider()
+                    SettingRow(
+                        title = "去设置忽略电池优化",
+                        showChevron = true,
+                        onClick = { BatteryOptimization.openRequest(context) },
+                    )
+                    SectionDivider()
+                    SettingRow(
+                        title = "打开应用详情",
+                        showChevron = true,
+                        onClick = { BatteryOptimization.openAppDetails(context) },
                     )
                 }
-            } else {
+            }
+
+            item {
+                SectionCard(title = "关于") {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Text(
+                            text = "绿联快连 " + BuildConfig.VERSION_NAME,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = "仅在本机加密保存账号密码，用于自动登录你的 NAS。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
+
+            item {
+                DiagnosticsLogCard(
+                    count = lines.size,
+                    lines = lines,
+                    onCopy = { copyLogs() },
+                    onClear = diagnostics::clear,
+                )
+            }
+        }
+    }
+
+    if (showLinkSheet) {
+        GlassActionSheet(
+            onDismissRequest = { showLinkSheet = false },
+            title = "外部链接打开方式",
+            actions = LINK_MODES.map { (value, label) ->
+                SheetAction(
+                    label = label,
+                    selected = data.externalLinkMode == value,
+                    onClick = {
+                        onExternalLinkModeChange(value)
+                        showLinkSheet = false
+                    },
+                )
+            },
+        )
+    }
+
+    val clearTarget = pendingClear
+    if (clearTarget != null) {
+        ConfirmDialog(
+            title = "清除登录状态",
+            message = "将清除「" + clearTarget.name + "」在本机保存的凭证，下次打开端口会重新登录。",
+            confirmText = "清除",
+            destructive = true,
+            onConfirm = {
+                onClearSession(clearTarget.id)
+                pendingClear = null
+            },
+            onDismiss = { pendingClear = null },
+        )
+    }
+
+    if (confirmClearCookies) {
+        ConfirmDialog(
+            title = "清除所有 Cookie",
+            message = "所有端口的网页登录态都会被重置，确定继续？",
+            confirmText = "清除",
+            destructive = true,
+            onConfirm = {
+                confirmClearCookies = false
+                onClearCookies()
+            },
+            onDismiss = { confirmClearCookies = false },
+        )
+    }
+}
+
+@Composable
+private fun DiagnosticsLogCard(
+    count: Int,
+    lines: List<String>,
+    onCopy: () -> Unit,
+    onClear: () -> Unit,
+) {
+    SectionCard(title = "诊断日志 · " + count + " 条") {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "登录、鉴权与页面加载的关键结果",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = onCopy,
+                enabled = count > 0,
+                contentPadding = PaddingValues(horizontal = 8.dp),
+            ) {
+                Text("复制", style = MaterialTheme.typography.labelMedium)
+            }
+            TextButton(
+                onClick = onClear,
+                enabled = count > 0,
+                contentPadding = PaddingValues(horizontal = 8.dp),
+            ) {
+                Text("清空", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (count == 0) {
+            Text(
+                text = "暂无日志。打开一次端口后，这里会显示登录与 GetUid 的结果。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+                    .heightIn(min = 120.dp, max = 240.dp)
+                    .clip(AppShape.field)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f)),
+                contentPadding = PaddingValues(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 items(lines.asReversed()) { line ->
                     Text(
                         text = line,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
         }
     }
-
-    if (showLinkModeDialog) {
-        AlertDialog(
-            onDismissRequest = { showLinkModeDialog = false },
-            title = { Text("外部链接打开方式") },
-            text = {
-                Column {
-                    LINK_MODES.forEach { (value, label) ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = data.externalLinkMode == value,
-                                onClick = {
-                                    onExternalLinkModeChange(value)
-                                    showLinkModeDialog = false
-                                },
-                            )
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showLinkModeDialog = false }) { Text("关闭") }
-            },
-        )
-    }
 }
+
+@Composable
+private fun StatusDot(ok: Boolean) {
+    Box(
+        Modifier
+            .size(9.dp)
+            .background(
+                if (ok) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                CircleShape,
+            ),
+    )
+    Spacer(Modifier.width(2.dp))
+}
+
+private val THEME_MODES = listOf(
+    PillOption(ThemeMode.LIGHT, "白天"),
+    PillOption(ThemeMode.DARK, "黑夜"),
+    PillOption(ThemeMode.SYSTEM, "自适应"),
+)
 
 private val LINK_MODES = listOf(
     "ask" to "每次询问",

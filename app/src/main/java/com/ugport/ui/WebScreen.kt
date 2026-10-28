@@ -28,30 +28,36 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -65,6 +71,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -72,6 +79,13 @@ import androidx.webkit.WebViewCompat
 import com.ugport.media.PlaybackHub
 import com.ugport.media.WebMediaController
 import com.ugport.network.HttpFactory
+import com.ugport.ui.components.ConfirmDialog
+import com.ugport.ui.components.GlassActionSheet
+import com.ugport.ui.components.GlassLevel
+import com.ugport.ui.components.GlassSurface
+import com.ugport.ui.components.SheetAction
+import com.ugport.ui.components.UgScaffold
+import com.ugport.ui.components.UgTopBar
 import com.ugport.util.BatteryOptimization
 import com.ugport.util.UrlTools
 import com.ugport.web.LoginScripts
@@ -266,26 +280,35 @@ fun WebScreen(
         if (view != null && view.canGoBack()) view.goBack() else onBack()
     }
 
-    Scaffold(
+    UgScaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(target.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
+            UgTopBar(
+                title = target.title,
+                onBack = onBack,
                 actions = {
                     IconButton(onClick = { webView?.reload() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "刷新",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                     IconButton(onClick = { fillCredentials() }) {
-                        Icon(Icons.Filled.Person, contentDescription = "填充账号密码")
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = "填充账号密码",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                     IconButton(onClick = { openExternal(context, Uri.parse(target.url)) }) {
-                        Icon(Icons.Filled.Share, contentDescription = "在浏览器打开")
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "在浏览器打开",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp),
+                        )
                     }
                 },
             )
@@ -296,12 +319,7 @@ fun WebScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (progress in 1..99) {
-                LinearProgressIndicator(
-                    progress = { progress / 100f },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            WebProgress(progress)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
@@ -706,18 +724,51 @@ fun WebScreen(
                             .padding(24.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Card {
+                        GlassSurface(
+                            modifier = Modifier.widthIn(max = 340.dp),
+                            level = GlassLevel.Strong,
+                            padding = PaddingValues(24.dp),
+                        ) {
                             Column(
-                                modifier = Modifier.padding(20.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Text(currentError, style = MaterialTheme.typography.bodyMedium)
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.errorContainer,
+                                            CircleShape,
+                                        ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(26.dp),
+                                    )
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = "页面加载失败",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = currentError,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 5,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.height(16.dp))
                                 Button(
                                     onClick = {
                                         errorText = null
                                         webView?.reload()
                                     },
-                                    modifier = Modifier.padding(top = 12.dp),
                                 ) { Text("重试") }
                             }
                         }
@@ -729,82 +780,65 @@ fun WebScreen(
 
     val linkToOpen = pendingLink
     if (linkToOpen != null) {
-        AlertDialog(
+        GlassActionSheet(
             onDismissRequest = {
                 pendingLink = null
                 rememberChoice = false
             },
-            title = { Text("打开链接") },
-            text = {
-                Column {
+            title = linkToOpen.host ?: "打开链接",
+            message = linkToOpen.toString(),
+            footer = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
-                        linkToOpen.host ?: linkToOpen.toString(),
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = "记住我的选择",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        linkToOpen.toString(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
+                    Switch(
+                        checked = rememberChoice,
+                        onCheckedChange = { rememberChoice = it },
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = rememberChoice,
-                            onCheckedChange = { rememberChoice = it },
-                        )
-                        Text("记住我的选择", style = MaterialTheme.typography.bodyMedium)
-                    }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (rememberChoice) onExternalLinkModeChange("internal")
-                    pendingInternal = linkToOpen.toString()
-                    pendingLink = null
-                    rememberChoice = false
-                    webView?.loadUrl(linkToOpen.toString())
-                }) { Text("应用内打开") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
+            actions = listOf(
+                SheetAction(
+                    label = "在应用内打开",
+                    onClick = {
+                        if (rememberChoice) onExternalLinkModeChange("internal")
+                        pendingInternal = linkToOpen.toString()
+                        pendingLink = null
+                        rememberChoice = false
+                        webView?.loadUrl(linkToOpen.toString())
+                    },
+                ),
+                SheetAction(
+                    label = "用浏览器打开",
+                    onClick = {
                         if (rememberChoice) onExternalLinkModeChange("external")
                         pendingLink = null
                         rememberChoice = false
                         openExternal(context, linkToOpen)
-                    }) { Text("浏览器打开") }
-                    TextButton(onClick = {
-                        pendingLink = null
-                        rememberChoice = false
-                    }) { Text("取消") }
-                }
-            },
+                    },
+                ),
+            ),
         )
     }
 
     if (showBatteryDialog) {
-        AlertDialog(
-            onDismissRequest = { showBatteryDialog = false },
-            title = { Text("后台播放保护") },
-            text = {
-                Text(
-                    "为了避免锁屏或切到后台后被系统中断，建议允许绿联快连忽略电池优化。\n\n" +
-                        "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动。"
-                )
+        ConfirmDialog(
+            title = "后台播放保护",
+            message = "为了避免锁屏或切到后台后被系统中断，建议允许绿联快连忽略电池优化。\n\n" +
+                "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动。",
+            confirmText = "去设置",
+            dismissText = "以后再说",
+            onConfirm = {
+                showBatteryDialog = false
+                BatteryOptimization.openRequest(context)
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    showBatteryDialog = false
-                    BatteryOptimization.openRequest(context)
-                }) { Text("去设置") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showBatteryDialog = false }) { Text("以后再说") }
-            },
+            onDismiss = { showBatteryDialog = false },
         )
     }
 
@@ -1150,6 +1184,39 @@ private fun enqueueDownload(
             )
         }
         (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+    }
+}
+
+
+@Composable
+private fun WebProgress(progress: Int) {
+    val animated by animateFloatAsState(
+        targetValue = if (progress > 0) progress.coerceIn(0, 100) / 100f else 0f,
+        animationSpec = tween(240, easing = LinearEasing),
+        label = "webProgress",
+    )
+    val visible = progress in 1..99
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(220),
+        label = "webProgressAlpha",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(2.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = alpha)),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(animated)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = alpha)),
+        )
     }
 }
 

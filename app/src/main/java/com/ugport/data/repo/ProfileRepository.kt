@@ -4,6 +4,7 @@ import com.ugport.data.crypto.KeystoreCipher
 import com.ugport.data.model.AppData
 import com.ugport.data.model.NasProfile
 import com.ugport.data.model.Shortcut
+import com.ugport.data.model.ThemeMode
 import com.ugport.data.store.ProfileStore
 import com.ugport.util.UrlTools
 import kotlinx.coroutines.CoroutineScope
@@ -37,6 +38,10 @@ class ProfileRepository(
 
     suspend fun setExternalLinkMode(mode: String) {
         store.update { it.copy(externalLinkMode = mode) }
+    }
+
+    suspend fun setThemeMode(mode: String) {
+        store.update { it.copy(themeMode = ThemeMode.sanitize(mode)) }
     }
 
     suspend fun saveNas(profile: NasProfile, plainPassword: String?) {

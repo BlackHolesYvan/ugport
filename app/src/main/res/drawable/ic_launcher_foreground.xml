@@ -3,16 +3,23 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 磨砂玻璃磁贴 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,26C38.54,26 26,38.54 26,54C26,69.46 38.54,82 54,82C69.46,82 82,69.46 82,54C82,38.54 69.46,26 54,26Z" />
+        android:fillColor="#33FFFFFF"
+        android:pathData="M42,30h24a12,12 0 0 1 12,12v24a12,12 0 0 1 -12,12h-24a12,12 0 0 1 -12,-12v-24a12,12 0 0 1 12,-12z"
+        android:strokeColor="#80FFFFFF"
+        android:strokeWidth="1.6" />
+    <!-- 端口宫格 -->
     <path
-        android:fillColor="#0B57D0"
-        android:pathData="M44,46h20a4,4 0 0,1 0,8h-20a4,4 0 0,1 0,-8Z" />
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M44,41h6a3,3 0 0 1 3,3v6a3,3 0 0 1 -3,3h-6a3,3 0 0 1 -3,-3v-6a3,3 0 0 1 3,-3z" />
     <path
-        android:fillColor="#0B57D0"
-        android:pathData="M50,54h8v16a4,4 0 0,1 -8,0Z" />
+        android:fillColor="#8CFFFFFF"
+        android:pathData="M58,41h6a3,3 0 0 1 3,3v6a3,3 0 0 1 -3,3h-6a3,3 0 0 1 -3,-3v-6a3,3 0 0 1 3,-3z" />
     <path
-        android:fillColor="#0B57D0"
-        android:pathData="M38,38h32a4,4 0 0,1 0,8h-32a4,4 0 0,1 0,-8Z" />
+        android:fillColor="#8CFFFFFF"
+        android:pathData="M44,55h6a3,3 0 0 1 3,3v6a3,3 0 0 1 -3,3h-6a3,3 0 0 1 -3,-3v-6a3,3 0 0 1 3,-3z" />
+    <path
+        android:fillColor="#8CFFFFFF"
+        android:pathData="M58,55h6a3,3 0 0 1 3,3v6a3,3 0 0 1 -3,3h-6a3,3 0 0 1 -3,-3v-6a3,3 0 0 1 3,-3z" />
 </vector>

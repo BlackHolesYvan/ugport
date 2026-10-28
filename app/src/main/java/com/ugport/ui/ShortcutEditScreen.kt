@@ -2,43 +2,41 @@ package com.ugport.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ugport.data.model.NasProfile
 import com.ugport.data.model.Shortcut
+import com.ugport.ui.components.ConfirmDialog
+import com.ugport.ui.components.PlainField
+import com.ugport.ui.components.SectionCard
+import com.ugport.ui.components.SectionDivider
+import com.ugport.ui.components.SettingRow
+import com.ugport.ui.components.SwitchRow
+import com.ugport.ui.components.UgScaffold
+import com.ugport.ui.components.UgTopBar
 import com.ugport.util.UrlTools
 import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShortcutEditScreen(
     nas: NasProfile?,
@@ -68,9 +66,7 @@ fun ShortcutEditScreen(
         )
     }
     var path by remember(shortcut?.id) {
-        mutableStateOf(
-            original.path.ifBlank { UrlTools.parsePath(original.url) }
-        )
+        mutableStateOf(original.path.ifBlank { UrlTools.parsePath(original.url) })
     }
     var appendUid by remember(shortcut?.id) { mutableStateOf(original.appendUid) }
     var desktopUa by remember(shortcut?.id) { mutableStateOf(original.desktopUa) }
@@ -79,16 +75,21 @@ fun ShortcutEditScreen(
 
     val portNumber = port.toIntOrNull()
     val canSave = name.isNotBlank() && portNumber != null && portNumber in 1..65535 && nas != null
+    val connectionId = nas?.let { profile ->
+        profile.connectionId.ifBlank { UrlTools.parseConnectionId(profile.baseUrl) }
+    }.orEmpty()
+    val dockerDomain = nas?.dockerDomain
+    val previewUrl = if (portNumber != null && portNumber in 1..65535 && !dockerDomain.isNullOrBlank()) {
+        "https://app-" + portNumber + "-" + connectionId + "." + dockerDomain + UrlTools.normalizePath(path)
+    } else {
+        null
+    }
 
-    Scaffold(
+    UgScaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (shortcut == null) "添加端口" else "编辑端口") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
+            UgTopBar(
+                title = if (shortcut == null) "添加端口" else "编辑端口",
+                onBack = onBack,
                 actions = {
                     TextButton(
                         enabled = canSave,
@@ -114,129 +115,121 @@ fun ShortcutEditScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            Text(
-                "所属 NAS：${nas?.name ?: "未选择"}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("名称") },
-                placeholder = { Text("例如：Jellyfin") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = port,
-                onValueChange = { input -> port = input.filter(Char::isDigit).take(5) },
-                label = { Text("端口号") },
-                placeholder = { Text("23003") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = path,
-                onValueChange = { path = it },
-                label = { Text("页面路径（可选）") },
-                placeholder = { Text("/panel") },
-                supportingText = { Text("留空表示根路径 /") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            val connectionId = nas?.let { profile ->
-                profile.connectionId.ifBlank { UrlTools.parseConnectionId(profile.baseUrl) }
-            }.orEmpty()
-            val dockerDomain = nas?.dockerDomain
-            if (portNumber != null && portNumber in 1..65535) {
-                Text(
-                    if (dockerDomain.isNullOrBlank()) {
-                        "保存并打开后会自动识别服务器标识"
-                    } else {
-                        "将打开：https://app-$portNumber-$connectionId.$dockerDomain${UrlTools.normalizePath(path)}"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            SectionCard(title = "所属 NAS") {
+                SettingRow(
+                    title = "NAS",
+                    value = nas?.name ?: "未选择",
+                    valueMonospace = false,
                 )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+
+            SectionCard(
+                title = "基本信息",
+                footer = "端口号决定访问地址，页面路径留空表示根路径 /。",
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("桌面版网页", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "关闭时按移动端页面加载（默认）；开启后使用桌面布局，适合 qBittorrent 等 WebUI",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = desktopUa, onCheckedChange = { desktopUa = it })
+                PlainField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = "名称",
+                    placeholder = "例如：Jellyfin",
+                    imeAction = ImeAction.Next,
+                )
+                SectionDivider()
+                PlainField(
+                    value = port,
+                    onValueChange = { input -> port = input.filter(Char::isDigit).take(5) },
+                    label = "端口号",
+                    placeholder = "23003",
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next,
+                )
+                SectionDivider()
+                PlainField(
+                    value = path,
+                    onValueChange = { path = it },
+                    label = "页面路径（可选）",
+                    placeholder = "/panel",
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                )
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("允许后台播放", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "开启后锁屏或切换应用仍可继续播放，并常驻通知栏媒体控制；" +
-                            "关闭后离开前台会暂停页面音频，适合 qBittorrent 等不需要后台播放的端口",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = allowBackground, onCheckedChange = { allowBackground = it })
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("自动获取访问凭证", style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        "Docker 端口会先调用 dockerToken 换取一次性登录地址；其他网关端口使用 uid",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = appendUid, onCheckedChange = { appendUid = it })
-            }
-            if (onDelete != null) {
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { confirmDelete = true },
-                    modifier = Modifier.fillMaxWidth(),
+
+            SectionCard(title = "打开地址") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                 ) {
-                    Icon(Icons.Filled.Delete, contentDescription = null)
-                    Text("  删除该端口")
+                    Text(
+                        text = previewUrl ?: "保存并打开后会自动识别服务器标识",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = if (previewUrl != null) FontFamily.Monospace else FontFamily.Default,
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
+
+            SectionCard(
+                title = "打开方式",
+                footer = "开启后台播放后，小米/红米还需在系统设置中允许自启动，并把省电策略设为无限制。",
+            ) {
+                SwitchRow(
+                    title = "桌面版网页",
+                    subtitle = "使用桌面布局，适合 qBittorrent 等 WebUI",
+                    checked = desktopUa,
+                    onCheckedChange = { desktopUa = it },
+                )
+                SectionDivider()
+                SwitchRow(
+                    title = "允许后台播放",
+                    subtitle = "锁屏或切换应用后继续播放，并常驻通知栏媒体控制",
+                    checked = allowBackground,
+                    onCheckedChange = { allowBackground = it },
+                )
+                SectionDivider()
+                SwitchRow(
+                    title = "自动获取访问凭证",
+                    subtitle = "Docker 端口先换取一次性登录地址，其他网关端口使用 uid",
+                    checked = appendUid,
+                    onCheckedChange = { appendUid = it },
+                )
+            }
+
+            if (onDelete != null) {
+                SectionCard {
+                    SettingRow(
+                        title = "删除该端口",
+                        subtitle = "只会移除这条快捷方式，不影响 NAS 配置",
+                        danger = true,
+                        showChevron = true,
+                        onClick = { confirmDelete = true },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
         }
     }
 
     if (confirmDelete && onDelete != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("删除端口") },
-            text = { Text("确定删除「${original.name}」？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    onDelete()
-                }) { Text("删除") }
+        ConfirmDialog(
+            title = "删除端口",
+            message = "确定删除「" + original.name + "」？",
+            confirmText = "删除",
+            destructive = true,
+            onConfirm = {
+                confirmDelete = false
+                onDelete()
             },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
-            },
+            onDismiss = { confirmDelete = false },
         )
     }
 }

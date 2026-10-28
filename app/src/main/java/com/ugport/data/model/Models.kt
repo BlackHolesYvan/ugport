@@ -46,4 +46,20 @@ data class AppData(
     val shortcuts: List<Shortcut> = emptyList(),
     /** 外部链接打开方式：ask（每次询问）/ internal（应用内）/ external（浏览器）。 */
     val externalLinkMode: String = "ask",
+    /** 界面主题：system（跟随系统）/ light / dark。 */
+    val themeMode: String = ThemeMode.SYSTEM,
 )
+
+/**
+ * 主题取值，与 AppData.themeMode 的持久化字面量保持一致。
+ */
+object ThemeMode {
+    const val SYSTEM = "system"
+    const val LIGHT = "light"
+    const val DARK = "dark"
+
+    val all = listOf(LIGHT, DARK, SYSTEM)
+
+    /** 未知值（手改库、降级写入）统一回落到跟随系统。 */
+    fun sanitize(raw: String?): String = raw?.takeIf { it in all } ?: SYSTEM
+}
