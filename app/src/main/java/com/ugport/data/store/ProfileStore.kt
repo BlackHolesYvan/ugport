@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ugport.data.model.AppData
+import com.ugport.data.model.AppDataMigrations
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -37,6 +38,7 @@ class ProfileStore(private val context: Context) {
 
     private fun decode(raw: String?): AppData {
         if (raw.isNullOrBlank()) return AppData()
-        return runCatching { json.decodeFromString<AppData>(raw) }.getOrDefault(AppData())
+        val data = runCatching { json.decodeFromString<AppData>(raw) }.getOrDefault(AppData())
+        return AppDataMigrations.migrate(data)
     }
 }

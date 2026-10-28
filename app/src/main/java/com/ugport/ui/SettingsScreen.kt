@@ -28,6 +28,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,9 +38,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ugport.data.model.AppData
 import com.ugport.network.Diagnostics
+import com.ugport.util.BatteryOptimization
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,7 +58,19 @@ fun SettingsScreen(
 ) {
     val lines by diagnostics.lines.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var showLinkModeDialog by remember { mutableStateOf(false) }
+    var ignoringBattery by remember { mutableStateOf(BatteryOptimization.isIgnoring(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                ignoringBattery = BatteryOptimization.isIgnoring(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun copyLogs() {
         val header = "绿联快连 ${com.ugport.BuildConfig.VERSION_NAME}\n" +
@@ -117,6 +134,39 @@ fun SettingsScreen(
                                 Text(linkModeLabel(data.externalLinkMode))
                             }
                         }
+                    }
+                }
+            }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("后台播放", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            if (ignoringBattery) {
+                                "已允许后台运行，锁屏后不易被系统中断"
+                            } else {
+                                "未允许后台运行，锁屏后可能被系统中断"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (ignoringBattery) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { BatteryOptimization.openRequest(context) }) {
+                                Text("去设置")
+                            }
+                            TextButton(onClick = { BatteryOptimization.openAppDetails(context) }) {
+                                Text("应用详情")
+                            }
+                        }
+                        Text(
+                            "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

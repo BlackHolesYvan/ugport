@@ -17,7 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -60,7 +60,7 @@ fun HomeScreen(
                 title = { Text("绿联快连") },
                 actions = {
                     IconButton(onClick = onManageNas) {
-                        Icon(Icons.Filled.List, contentDescription = "NAS 管理")
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "NAS 管理")
                     }
                     IconButton(onClick = onSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "设置")

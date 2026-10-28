@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.drawable.Icon
 import android.media.session.MediaSession
 import android.os.Build
 import androidx.core.app.NotificationManagerCompat
@@ -75,7 +76,7 @@ object MediaNotification {
             compact.add(actions.size)
             actions.add(
                 Notification.Action.Builder(
-                    android.R.drawable.ic_media_previous,
+                    Icon.createWithResource(context, android.R.drawable.ic_media_previous),
                     context.getString(R.string.notification_previous),
                     previousIntent,
                 ).build()
@@ -85,11 +86,14 @@ object MediaNotification {
         compact.add(actions.size)
         actions.add(
             Notification.Action.Builder(
-                if (snapshot.playing) {
-                    android.R.drawable.ic_media_pause
-                } else {
-                    android.R.drawable.ic_media_play
-                },
+                Icon.createWithResource(
+                    context,
+                    if (snapshot.playing) {
+                        android.R.drawable.ic_media_pause
+                    } else {
+                        android.R.drawable.ic_media_play
+                    },
+                ),
                 context.getString(
                     if (snapshot.playing) R.string.notification_pause else R.string.notification_play
                 ),
@@ -101,7 +105,7 @@ object MediaNotification {
             compact.add(actions.size)
             actions.add(
                 Notification.Action.Builder(
-                    android.R.drawable.ic_media_next,
+                    Icon.createWithResource(context, android.R.drawable.ic_media_next),
                     context.getString(R.string.notification_next),
                     nextIntent,
                 ).build()
@@ -109,7 +113,7 @@ object MediaNotification {
         }
         actions.add(
             Notification.Action.Builder(
-                android.R.drawable.ic_menu_close_clear_cancel,
+                Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
                 context.getString(R.string.notification_stop),
                 stopIntent,
             ).build()
@@ -121,9 +125,8 @@ object MediaNotification {
                 snapshot.title.ifBlank { context.getString(R.string.notification_unknown_track) }
             )
             .setContentIntent(contentIntent)
-            .setDeleteIntent(stopIntent)
             .setOnlyAlertOnce(true)
-            .setOngoing(snapshot.playing)
+            .setOngoing(snapshot.hasMedia)
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setStyle(
@@ -132,6 +135,9 @@ object MediaNotification {
                     .setShowActionsInCompactView(*compact.toIntArray())
             )
         if (snapshot.artist.isNotBlank()) builder.setContentText(snapshot.artist)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
         actions.forEach { builder.addAction(it) }
         return builder.build()
     }

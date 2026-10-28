@@ -104,7 +104,7 @@ b"}""")
     fun keepsCapabilitiesWithoutMediaElement() {
         val snapshot = requireNotNull(
             MediaStateParser.parse(
-                """{"v":3,"has":false,"playing":false,"state":"none","canNext":true}"""
+                """{"v":4,"has":false,"playing":false,"state":"none","canNext":true}"""
             )
         )
         assertEquals(PlaybackPhase.NONE, snapshot.phase)

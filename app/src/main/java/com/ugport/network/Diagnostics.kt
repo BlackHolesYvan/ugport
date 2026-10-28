@@ -1,5 +1,6 @@
 package com.ugport.network
 
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,12 +22,25 @@ class Diagnostics {
         }
     }
 
+    /** 关键事件：进入诊断页，同时写 logcat。 */
+    fun event(message: String, tag: String = DEFAULT_TAG) {
+        log(message)
+        Log.i(tag, message)
+    }
+
+    /** 高频细节：只写 logcat，不占诊断缓冲。 */
+    fun detail(message: String, tag: String = DEFAULT_TAG) {
+        Log.d(tag, message)
+    }
+
     fun clear() {
         synchronized(lock) { _lines.value = emptyList() }
     }
 
     fun redactUrl(url: String): String =
-        Regex("([?&](?:token|uid|ugk)=)[^&\"'\\s]+").replace(url) { it.groupValues[1] + "***" }
+        Regex("([?&](?:token|uid|ugk|code|key|sign)=)[^&\"'\\s]+").replace(url) {
+            it.groupValues[1] + "***"
+        }
 
     fun maskToken(token: String?): String {
         if (token.isNullOrEmpty()) return "<none>"
@@ -36,5 +50,6 @@ class Diagnostics {
 
     private companion object {
         const val MAX_LINES = 200
+        const val DEFAULT_TAG = "UgPort"
     }
 }

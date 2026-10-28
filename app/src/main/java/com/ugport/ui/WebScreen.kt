@@ -72,14 +72,17 @@ import androidx.webkit.WebViewCompat
 import com.ugport.media.PlaybackHub
 import com.ugport.media.WebMediaController
 import com.ugport.network.HttpFactory
+import com.ugport.util.BatteryOptimization
 import com.ugport.util.UrlTools
 import com.ugport.web.LoginScripts
 import com.ugport.web.MediaHookScript
 import com.ugport.web.WebBridge
 import com.ugport.web.WebMediaBridge
 import com.ugport.web.WebViewConfigurator
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,6 +99,8 @@ fun WebScreen(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentTarget = rememberUpdatedState(target)
     val desktopUa = target.shortcut.desktopUa
+    // 端口级开关：关闭后不注入媒体脚本、不建媒体桥、不启动前台服务
+    val mediaEnabled = target.shortcut.allowBackground
     var webView by remember { mutableStateOf<WebView?>(null) }
     // 只用于 dispose 时精确解绑，避免误清新页面的控制器
     val mediaControllerHolder = remember { arrayOfNulls<WebMediaController>(1) }
@@ -113,6 +118,10 @@ fun WebScreen(
     var pendingLink by remember { mutableStateOf<Uri?>(null) }
     var pendingInternal by remember { mutableStateOf<String?>(null) }
     var rememberChoice by remember { mutableStateOf(false) }
+    var showBatteryDialog by remember { mutableStateOf(false) }
+    // 控制台错误去重：第三方页面常连续输出同一条
+    var lastConsoleKey by remember { mutableStateOf("") }
+    var lastConsoleAt by remember { mutableStateOf(0L) }
 
     val fileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -124,27 +133,47 @@ fun WebScreen(
         )
     }
 
+    fun maybePromptBatteryOptimization() {
+        if (!mediaEnabled) return
+        if (BatteryOptimization.isIgnoring(context)) return
+        val prefs = context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("battery_prompted", false)) return
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        prefs.edit().putBoolean("battery_prompted", true).apply()
+        showBatteryDialog = true
+    }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        viewModel.diagnostics.log("web: notification permission granted=$granted")
+        viewModel.diagnostics.detail("web: notification permission granted=$granted")
+        maybePromptBatteryOptimization()
     }
 
     fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (!mediaEnabled) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            maybePromptBatteryOptimization()
+            return
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
         ) {
+            maybePromptBatteryOptimization()
             return
         }
         val prefs = context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("notification_asked", false)) return
+        if (prefs.getBoolean("notification_asked", false)) {
+            maybePromptBatteryOptimization()
+            return
+        }
         if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
         prefs.edit().putBoolean("notification_asked", true).apply()
         runCatching {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }.onFailure {
             viewModel.diagnostics.log("web: notification permission launch failed")
+            maybePromptBatteryOptimization()
         }
     }
 
@@ -168,17 +197,17 @@ fun WebScreen(
             if (view.url == url && blankRetriedUrl != url) {
                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { result ->
                     val blank = result?.trim('"') == "blank"
-                    viewModel.diagnostics.log(
-                        "web: blank check=$blank " + viewModel.diagnostics.redactUrl(url)
-                    )
                     if (blank) {
+                        viewModel.diagnostics.log(
+                            "web: blank check=true " + viewModel.diagnostics.redactUrl(url)
+                        )
                         // 给前端留出初始化时间，二次确认后再动缓存
                         view.postDelayed({
                             if (playback.isPlaying) return@postDelayed
                             if (view.url == url && blankRetriedUrl != url) {
                                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { second ->
                                     val stillBlank = second?.trim('"') == "blank"
-                                    viewModel.diagnostics.log("web: blank recheck=$stillBlank")
+                                    viewModel.diagnostics.detail("web: blank recheck=$stillBlank")
                                     if (stillBlank) {
                                         blankRetriedUrl = url
                                         viewModel.diagnostics.log(
@@ -224,7 +253,7 @@ fun WebScreen(
             view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
                 if (result?.trim('"') == "short") {
                     view.evaluateJavascript(PAGE_INFO_SCRIPT) { info ->
-                        viewModel.diagnostics.log("web page+: " + viewModel.diagnostics.redactUrl(info.orEmpty()))
+                        viewModel.diagnostics.detail("web page+: " + viewModel.diagnostics.redactUrl(info.orEmpty()))
                     }
                     scheduleHeightFollowUp(view, url, attempt + 1)
                 }
@@ -278,7 +307,7 @@ fun WebScreen(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         WebView(ctx).apply {
-                            WebViewConfigurator.configure(this, desktopUa)
+                            WebViewConfigurator.configure(this, desktopUa, mediaEnabled)
                             addJavascriptInterface(
                                 WebBridge { token ->
                                     val current = currentTarget.value
@@ -286,23 +315,25 @@ fun WebScreen(
                                 },
                                 "UgBridge",
                             )
-                            val mediaController = object : WebMediaController {
-                                override fun evaluate(script: String) {
-                                    post { runCatching { evaluateJavascript(script, null) } }
-                                }
+                            if (mediaEnabled) {
+                                val mediaController = object : WebMediaController {
+                                    override fun evaluate(script: String) {
+                                        post { runCatching { evaluateJavascript(script, null) } }
+                                    }
 
-                                override fun isTrustedPage(): Boolean {
-                                    val baseUrl = viewModel.repo.nas(currentTarget.value.nasId)?.baseUrl
-                                    val host = runCatching { Uri.parse(url) }.getOrNull()?.host
-                                    return WebViewConfigurator.isTrustedHost(host, baseUrl)
+                                    override fun isTrustedPage(): Boolean {
+                                        val baseUrl = viewModel.repo.nas(currentTarget.value.nasId)?.baseUrl
+                                        val host = runCatching { Uri.parse(url) }.getOrNull()?.host
+                                        return WebViewConfigurator.isTrustedHost(host, baseUrl)
+                                    }
                                 }
+                                mediaControllerHolder[0] = mediaController
+                                playback.attach(mediaController)
+                                addJavascriptInterface(
+                                    WebMediaBridge { json -> playback.onJsState(json) },
+                                    "UgMedia",
+                                )
                             }
-                            mediaControllerHolder[0] = mediaController
-                            playback.attach(mediaController)
-                            addJavascriptInterface(
-                                WebMediaBridge { json -> playback.onJsState(json) },
-                                "UgMedia",
-                            )
                             webViewClient = object : WebViewClient() {
                                 override fun onPageStarted(
                                     view: WebView?,
@@ -310,7 +341,7 @@ fun WebScreen(
                                     favicon: Bitmap?,
                                 ) {
                                     super.onPageStarted(view, url, favicon)
-                                    playback.onPageStarted()
+                                    if (mediaEnabled) playback.onPageStarted()
                                     progress = 10
                                     if (url != null) {
                                         if (url == pendingInternal) pendingInternal = null
@@ -323,16 +354,19 @@ fun WebScreen(
                                     progress = 100
                                     if (view == null || url == null) return
                                     if (view.url == url) {
-                                        viewModel.diagnostics.log("web: finish ${viewModel.diagnostics.redactUrl(url)}")
                                         view.evaluateJavascript(PAGE_INFO_SCRIPT) { result ->
-                                            viewModel.diagnostics.log("web page: ${viewModel.diagnostics.redactUrl(result.orEmpty())}")
+                                            viewModel.diagnostics.detail(
+                                                "web page: ${viewModel.diagnostics.redactUrl(result.orEmpty())}"
+                                            )
                                         }
-                                        playback.onPageLoaded()
-                                        view.post {
-                                            view.evaluateJavascript("window.__ugMediaVersion === 3") { result ->
-                                                viewModel.diagnostics.log(
-                                                    "web: media hook=" + (result?.trim('"') ?: "?")
-                                                )
+                                        if (mediaEnabled) {
+                                            playback.onPageLoaded()
+                                            view.post {
+                                                view.evaluateJavascript("window.__ugMediaVersion === 4") { result ->
+                                                    viewModel.diagnostics.detail(
+                                                        "web: media hook=" + (result?.trim('"') ?: "?")
+                                                    )
+                                                }
                                             }
                                         }
                                         scheduleBlankCheck(view, url)
@@ -401,19 +435,19 @@ fun WebScreen(
                                     // 这里补一次修复（延迟一次覆盖异步渲染）
                                     view.evaluateJavascript(VH_FIX_SCRIPT) { result ->
                                         val n = result?.trim('"')?.toIntOrNull() ?: 0
-                                        if (n > 0) viewModel.diagnostics.log("web: spa vhFix=$n")
+                                        if (n > 0) viewModel.diagnostics.detail("web: spa vhFix=$n")
                                     }
                                     view.postDelayed({
                                         view.evaluateJavascript(VH_FIX_SCRIPT) { result ->
                                             val n = result?.trim('"')?.toIntOrNull() ?: 0
-                                            if (n > 0) viewModel.diagnostics.log("web: spa vhFix=$n (late)")
+                                            if (n > 0) viewModel.diagnostics.detail("web: spa vhFix=$n (late)")
                                         }
                                     }, 600L)
                                     view.postDelayed({
                                         view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
                                             if (result?.trim('"') == "short") {
                                                 view.evaluateJavascript(PAGE_INFO_SCRIPT) { info ->
-                                                    viewModel.diagnostics.log(
+                                                    viewModel.diagnostics.detail(
                                                         "web page(spa): " +
                                                             viewModel.diagnostics.redactUrl(info.orEmpty())
                                                     )
@@ -441,16 +475,16 @@ fun WebScreen(
                                         if (WebViewConfigurator.isTrustedHost(uri.host, baseUrl)) return false
                                         when (externalLinkMode) {
                                             "internal" -> {
-                                                viewModel.diagnostics.log("web: link ${uri.host} -> internal")
+                                                viewModel.diagnostics.detail("web: link ${uri.host} -> internal")
                                                 return false
                                             }
                                             "external" -> {
-                                                viewModel.diagnostics.log("web: link ${uri.host} -> external")
+                                                viewModel.diagnostics.detail("web: link ${uri.host} -> external")
                                                 openExternal(context, uri)
                                                 return true
                                             }
                                             else -> {
-                                                viewModel.diagnostics.log("web: link ${uri.host} -> ask")
+                                                viewModel.diagnostics.detail("web: link ${uri.host} -> ask")
                                                 rememberChoice = false
                                                 pendingLink = uri
                                                 return true
@@ -509,11 +543,15 @@ fun WebScreen(
                                                 }
                                                 .mapValues { it.value.joinToString(", ") }
                                             val cost = System.currentTimeMillis() - started
-                                            // 正常 chunk 不刷屏，只记录失败或明显变慢的请求
-                                            if (resp.code !in 200..299 || cost > 1500) {
+                                            // 失败进诊断；单纯变慢只进 logcat
+                                            val file = path.substringAfterLast('/')
+                                            if (resp.code !in 200..299) {
                                                 viewModel.diagnostics.log(
-                                                    "web: chunk ${resp.code} ${cost}ms " +
-                                                        path.substringAfterLast('/')
+                                                    "web: chunk ${resp.code} ${cost}ms $file"
+                                                )
+                                            } else if (cost > 1500) {
+                                                viewModel.diagnostics.detail(
+                                                    "web: chunk slow ${cost}ms $file"
                                                 )
                                             }
                                             WebResourceResponse(
@@ -576,7 +614,7 @@ fun WebScreen(
                                 ): Boolean {
                                     errorText = "WebView 渲染进程已退出，请返回重试"
                                     viewModel.diagnostics.log("web: render process gone")
-                                    playback.onRendererGone()
+                                    if (mediaEnabled) playback.onRendererGone()
                                     return true
                                 }
                             }
@@ -608,10 +646,22 @@ fun WebScreen(
                                         if (level == ConsoleMessage.MessageLevel.ERROR ||
                                             level == ConsoleMessage.MessageLevel.WARNING
                                         ) {
-                                            viewModel.diagnostics.log(
-                                                "web console [$level] ${message.message()} " +
+                                            val body = viewModel.diagnostics.redactUrl(
+                                                "${message.message().take(200)} " +
                                                     "@${message.sourceId()}:${message.lineNumber()}"
                                             )
+                                            val key = "$level|$body"
+                                            val now = System.currentTimeMillis()
+                                            // 第三方页面常连续输出同一条，5 秒内只记一次
+                                            if (key != lastConsoleKey || now - lastConsoleAt >= 5_000) {
+                                                lastConsoleKey = key
+                                                lastConsoleAt = now
+                                                if (level == ConsoleMessage.MessageLevel.ERROR) {
+                                                    viewModel.diagnostics.log("web console [ERROR] $body")
+                                                } else {
+                                                    viewModel.diagnostics.detail("web console [WARN] $body")
+                                                }
+                                            }
                                         }
                                     }
                                     return true
@@ -736,8 +786,35 @@ fun WebScreen(
         )
     }
 
+    if (showBatteryDialog) {
+        AlertDialog(
+            onDismissRequest = { showBatteryDialog = false },
+            title = { Text("后台播放保护") },
+            text = {
+                Text(
+                    "为了避免锁屏或切到后台后被系统中断，建议允许绿联快连忽略电池优化。\n\n" +
+                        "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBatteryDialog = false
+                    BatteryOptimization.openRequest(context)
+                }) { Text("去设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatteryDialog = false }) { Text("以后再说") }
+            },
+        )
+    }
+
     LaunchedEffect(target.url) {
-        playback.onPageStarted()
+        if (mediaEnabled) {
+            playback.onPageStarted()
+        } else {
+            // 关闭后台播放的端口不继承上一个端口的前台服务/通知
+            playback.detach()
+        }
         blankRetriedUrl = null
         // 等待 AndroidView 创建 WebView；只用 target.url 作为 key，避免 WebView 状态变化导致重复准备鉴权
         val view = snapshotFlow { webView }.filterNotNull().first()
@@ -747,18 +824,39 @@ fun WebScreen(
         errorText = null
         progress = 10
         val webViewPackage = WebViewCompat.getCurrentWebViewPackage(view.context)
-        viewModel.diagnostics.log(
+        viewModel.diagnostics.detail(
             "web: webview=${webViewPackage?.packageName} ${webViewPackage?.versionName}"
         )
-        viewModel.diagnostics.log("web: load ${viewModel.diagnostics.redactUrl(loadUrl)}")
         // 无论 WebView 之前是否已经加载过目标地址，拿到 Cookie 后都重新加载一次，
         // 避免第一次无 Cookie 的请求把页面渲染成空白/未登录状态。
         // 用当前生效的 UA（移动端为系统默认 UA，桌面端为 DESKTOP_UA）
         view.loadUrl(loadUrl, mapOf("User-Agent" to view.settings.userAgentString))
     }
 
+    LaunchedEffect(webView) {
+        if (!mediaEnabled) return@LaunchedEffect
+        val view = webView ?: return@LaunchedEffect
+        playback.state
+            .map { it.hasMedia }
+            .distinctUntilChanged()
+            .collect { hasMedia ->
+                runCatching {
+                    view.setRendererPriorityPolicy(
+                        if (hasMedia) {
+                            WebView.RENDERER_PRIORITY_IMPORTANT
+                        } else {
+                            WebView.RENDERER_PRIORITY_BOUND
+                        },
+                        false,
+                    )
+                }
+            }
+    }
+
     DisposableEffect(Unit) {
-        playback.onPlaybackStarted = { requestNotificationPermissionIfNeeded() }
+        if (mediaEnabled) {
+            playback.onPlaybackStarted = { requestNotificationPermissionIfNeeded() }
+        }
         onDispose {
             playback.onPlaybackStarted = null
             // 先断开媒体控制并停止前台服务，再销毁 WebView
@@ -773,8 +871,21 @@ fun WebScreen(
 
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
+            if (!mediaEnabled) {
+                // 不允许后台播放：离开前台先暂停页面音频，再暂停 WebView 渲染与定时器
+                when (event) {
+                    Lifecycle.Event.ON_START -> webView?.onResume()
+                    Lifecycle.Event.ON_STOP -> {
+                        webView?.evaluateJavascript(MEDIA_PAUSE_SCRIPT, null)
+                        webView?.onPause()
+                    }
+                    else -> Unit
+                }
+            } else if (event == Lifecycle.Event.ON_START) {
+                // inject 是幂等的，页面在后台重载/渲染进程恢复后补一次注入
+                webView?.evaluateJavascript(MediaHookScript.inject(), null)
                 webView?.evaluateJavascript(MediaHookScript.probe(), null)
+                playback.onHostResumed()
                 if (playback.isPlaying) requestNotificationPermissionIfNeeded()
             }
         }
@@ -782,6 +893,11 @@ fun WebScreen(
         onDispose { lifecycle.removeObserver(observer) }
     }
 }
+
+/** 关闭「允许后台播放」的端口在离开前台时调用，不依赖已注入的媒体脚本。 */
+private const val MEDIA_PAUSE_SCRIPT =
+    "(function(){try{var m=document.querySelectorAll('audio,video');" +
+        "for(var i=0;i<m.length;i++){try{m[i].pause();}catch(e){}}}catch(e){}})();"
 
 private val VH_FIX_SCRIPT = """
     (function(){
@@ -997,9 +1113,7 @@ private val PAGE_INFO_SCRIPT = """
           bodyRect: rectOf(document.body),
           desktop: (function(){ var d=document.getElementById('desktop'); if(!d) return null; var s=getComputedStyle(d),b=d.getBoundingClientRect(); return [s.display,s.visibility,s.opacity,b.x,b.y,b.width,b.height]; })(),
           atCenter: e ? (e.id || (typeof e.className === 'string' ? e.className : '') || e.tagName) : '',
-          errors: (window.__ugErrors || []).slice(0, 5),
-          text: document.body ? document.body.innerText.slice(0, 150).replace(/\s+/g, ' ') : '',
-          url: location.href
+          errors: (window.__ugErrors || []).slice(0, 5)
         });
       } catch (err) {
         return 'err:' + err;

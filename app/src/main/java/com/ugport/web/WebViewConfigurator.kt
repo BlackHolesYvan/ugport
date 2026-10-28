@@ -30,7 +30,11 @@ object WebViewConfigurator {
     /** 系统 WebView 默认 UA（移动端），取一次即可。 */
     private var defaultUa: String? = null
 
-    fun configure(webView: WebView, desktopUa: Boolean) {
+    /**
+     * @param mediaEnabled 端口是否允许后台播放。关闭时不注入媒体探测脚本，
+     *   页面只在前台正常出声，不产生媒体桥、轮询和前台服务开销。
+     */
+    fun configure(webView: WebView, desktopUa: Boolean, mediaEnabled: Boolean = true) {
         // 升级后清理一次历史缓存：之前版本的缓存里可能残留不可用的脚本响应，
         // 表现为页面只有菜单骨架、正文全空。
         val prefs = webView.context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
@@ -69,7 +73,9 @@ object WebViewConfigurator {
             runCatching {
                 WebViewCompat.addDocumentStartJavaScript(webView, ERROR_HOOK_SCRIPT, setOf("*"))
                 // 媒体探测脚本尽早注入，才能捕获页面初始化阶段的播放事件
-                WebViewCompat.addDocumentStartJavaScript(webView, MediaHookScript.inject(), setOf("*"))
+                if (mediaEnabled) {
+                    WebViewCompat.addDocumentStartJavaScript(webView, MediaHookScript.inject(), setOf("*"))
+                }
             }
         }
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)

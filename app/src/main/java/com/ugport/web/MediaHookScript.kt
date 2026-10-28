@@ -17,8 +17,8 @@ object MediaHookScript {
 
     private val SCRIPT = """
         (function () {
-          if (window.__ugMediaVersion >= 3) return;
-          window.__ugMediaVersion = 3;
+          if (window.__ugMediaVersion >= 4) return;
+          window.__ugMediaVersion = 4;
 
           var EVENTS = ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'durationchange',
                         'timeupdate', 'volumechange', 'waiting', 'stalled', 'error', 'emptied',
@@ -33,6 +33,8 @@ object MediaHookScript {
           var handlers = {};
           var msHooked = false;
           var lastSkipSig = '';
+          var lastSkipCheckAt = 0;
+          var lastActiveEl = null;
           var SKIP_MAX_DEPTH = 4;
           var SKIP_ICON_SELECTOR =
             'svg[class*="lucide-skip-"], svg[data-lucide="skip-back"], svg[data-lucide="skip-forward"]';
@@ -141,18 +143,18 @@ object MediaHookScript {
             try { return btn.getClientRects().length > 0; } catch (e) { return false; }
           }
 
-          function iconButton(root, dir) {
+          // hiddenOut 用于记住祖先链里第一个不可见按钮；可见按钮优先返回
+          function iconButton(root, dir, hiddenOut) {
             var icons;
             try { icons = root.querySelectorAll(SKIP_ICON_SELECTOR); } catch (e) { return null; }
-            var hidden = null;
             for (var i = 0; i < icons.length; i++) {
               if (skipIconDir(icons[i]) !== dir) continue;
               var btn = icons[i].closest ? icons[i].closest('button, [role="button"]') : null;
               if (!buttonUsable(btn)) continue;
               if (buttonVisible(btn)) return btn;
-              if (!hidden) hidden = btn;
+              if (hiddenOut && !hiddenOut.value) hiddenOut.value = btn;
             }
-            return hidden;
+            return null;
           }
 
           function iconPresent(root, dir) {
@@ -172,31 +174,24 @@ object MediaHookScript {
             try { play = scope.querySelector('button[aria-label^="player."]'); } catch (e) { play = null; }
             if (play && play.parentElement) {
               var group = play.parentElement;
-              var direct = iconButton(group, dir);
+              var groupHidden = { value: null };
+              var direct = iconButton(group, dir, groupHidden);
               if (direct) return direct;
+              if (groupHidden.value) return groupHidden.value;
               // 控制组里存在该按钮但被禁用（首章/末章），不要再去祖先链里找别的播放器
               if (iconPresent(group, dir)) return null;
             }
             var node = el.parentElement;
             var depth = 0;
-            var hidden = null;
+            var hidden = { value: null };
             while (node && depth <= SKIP_MAX_DEPTH &&
                    node !== document.body && node !== document.documentElement) {
-              var icons = null;
-              try { icons = node.querySelectorAll(SKIP_ICON_SELECTOR); } catch (e) { icons = null; }
-              if (icons) {
-                for (var i = 0; i < icons.length; i++) {
-                  if (skipIconDir(icons[i]) !== dir) continue;
-                  var btn = icons[i].closest ? icons[i].closest('button, [role="button"]') : null;
-                  if (!buttonUsable(btn)) continue;
-                  if (buttonVisible(btn)) return btn;
-                  if (!hidden) hidden = btn;
-                }
-              }
+              var found = iconButton(node, dir, hidden);
+              if (found) return found;
               node = node.parentElement;
               depth++;
             }
-            return hidden;
+            return hidden.value;
           }
 
           function metadata() {
@@ -237,7 +232,7 @@ object MediaHookScript {
                 bestScore = value;
               }
             }
-            return best;
+            return best || lastActiveEl;
           }
 
           function snapshot() {
@@ -252,7 +247,7 @@ object MediaHookScript {
               } catch (e) {}
               var playing = msState === 'playing';
               return {
-                v: 3, has: false, playing: playing,
+                v: 4, has: false, playing: playing,
                 state: playing ? 'playing' : (msState === 'paused' ? 'paused' : 'none'),
                 pos: 0, dur: 0, rate: 1, kind: 'audio',
                 canPrev: caps.msPrev, canNext: caps.msNext,
@@ -270,7 +265,7 @@ object MediaHookScript {
             // 直播流 duration=Infinity，没有可切曲目，隐藏上一首/下一首
             var live = rawDuration === Infinity;
             return {
-              v: 3, has: true, playing: active, state: state,
+              v: 4, has: true, playing: active, state: state,
               pos: Math.max(0, Math.round(finite(el.currentTime, 0) * 1000)),
               dur: Math.round(duration * 1000),
               rate: finite(el.playbackRate, 1),
@@ -304,6 +299,9 @@ object MediaHookScript {
 
           function onEvent(event) {
             if (!event) return;
+            if (event.target && (event.type === 'play' || event.type === 'playing')) {
+              lastActiveEl = event.target;
+            }
             if (event.type === 'timeupdate') {
               var now = Date.now();
               if (now - lastTimeUpdateAt < 1000) return;
@@ -353,8 +351,11 @@ object MediaHookScript {
               }
             }
             if (changed) schedule(80);
-            if (typeof handlers['previoustrack'] !== 'function' ||
-                typeof handlers['nexttrack'] !== 'function') {
+            var skipNow = Date.now();
+            if (skipNow - lastSkipCheckAt >= 1000 &&
+                (typeof handlers['previoustrack'] !== 'function' ||
+                 typeof handlers['nexttrack'] !== 'function')) {
+              lastSkipCheckAt = skipNow;
               var picked = pick();
               var sig = picked
                 ? (skipButton(picked, 'prev') ? '1' : '0') + (skipButton(picked, 'next') ? '1' : '0')
@@ -454,6 +455,36 @@ object MediaHookScript {
                     return 'error';
                   }
                 }
+              } else if (cmd === 'recover') {
+                var target = pick() || lastActiveEl;
+                if (!target) return 'no-media';
+                var src = target.currentSrc || target.src || '';
+                if (target.__ugRecoverSrc === src &&
+                    target.__ugRecoverAt &&
+                    Date.now() - target.__ugRecoverAt < 60000) {
+                  return 'throttled';
+                }
+                target.__ugRecoverSrc = src;
+                target.__ugRecoverAt = Date.now();
+                var pos = finite(target.currentTime, 0);
+                var isBlob = src.indexOf('blob:') === 0;
+                var isLive = target.duration === Infinity;
+                if (isBlob || isLive) {
+                  safePlay(target);
+                } else if (target.readyState < 3 || target.error || target.networkState === 3) {
+                  try {
+                    target.addEventListener('loadedmetadata', function onMeta() {
+                      target.removeEventListener('loadedmetadata', onMeta);
+                      try { target.currentTime = pos; } catch (e) {}
+                      safePlay(target);
+                    });
+                    target.load();
+                  } catch (e) {
+                    return 'error';
+                  }
+                } else {
+                  safePlay(target);
+                }
               } else {
                 return 'unknown';
               }
@@ -521,7 +552,7 @@ object MediaHookScript {
             var api = bridge();
             if (!api || !api.postState) return;
             try {
-              api.postState('{"v":3,"has":false,"playing":false,"state":"none","pos":0,"dur":0,"canPrev":false,"canNext":false}');
+              api.postState('{"v":4,"has":false,"playing":false,"state":"none","pos":0,"dur":0,"canPrev":false,"canNext":false}');
             } catch (e) {}
           });
         })();

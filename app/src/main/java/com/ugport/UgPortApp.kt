@@ -12,4 +12,11 @@ class UgPortApp : Application() {
         super.onCreate()
         container = AppContainer(this)
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::container.isInitialized) {
+            container.diagnostics.detail("app: trimMemory=$level")
+        }
+    }
 }

@@ -57,6 +57,7 @@ fun ShortcutEditScreen(
             url = "",
             appendUid = true,
             desktopUa = false,
+            allowBackground = false,
         )
     }
     var name by remember(shortcut?.id) { mutableStateOf(original.name) }
@@ -73,6 +74,7 @@ fun ShortcutEditScreen(
     }
     var appendUid by remember(shortcut?.id) { mutableStateOf(original.appendUid) }
     var desktopUa by remember(shortcut?.id) { mutableStateOf(original.desktopUa) }
+    var allowBackground by remember(shortcut?.id) { mutableStateOf(original.allowBackground) }
     var confirmDelete by remember { mutableStateOf(false) }
 
     val portNumber = port.toIntOrNull()
@@ -99,6 +101,7 @@ fun ShortcutEditScreen(
                                     url = "",
                                     appendUid = appendUid,
                                     desktopUa = desktopUa,
+                                    allowBackground = allowBackground,
                                 )
                             )
                         },
@@ -175,6 +178,22 @@ fun ShortcutEditScreen(
                     )
                 }
                 Switch(checked = desktopUa, onCheckedChange = { desktopUa = it })
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("允许后台播放", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "开启后锁屏或切换应用仍可继续播放，并常驻通知栏媒体控制；" +
+                            "关闭后离开前台会暂停页面音频，适合 qBittorrent 等不需要后台播放的端口",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = allowBackground, onCheckedChange = { allowBackground = it })
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
