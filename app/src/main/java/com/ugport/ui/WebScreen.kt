@@ -1,14 +1,17 @@
 package com.ugport.ui
 
 import android.Manifest
+import android.app.Activity
 import android.app.DownloadManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
@@ -22,6 +25,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -29,35 +33,42 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -70,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,15 +96,23 @@ import com.ugport.ui.components.GlassActionSheet
 import com.ugport.ui.components.GlassLevel
 import com.ugport.ui.components.GlassSurface
 import com.ugport.ui.components.SheetAction
-import com.ugport.ui.components.UgScaffold
-import com.ugport.ui.components.UgTopBar
+import com.ugport.ui.components.glass
+import com.ugport.ui.components.WebGpuHint
 import com.ugport.util.BatteryOptimization
 import com.ugport.util.UrlTools
 import com.ugport.web.LoginScripts
 import com.ugport.web.MediaHookScript
+import com.ugport.web.GpuAdapterState
 import com.ugport.web.WebBridge
+import com.ugport.web.WebFullscreenHost
+import com.ugport.web.WebGpuProbe
+import com.ugport.web.WebGpuProbeResult
+import com.ugport.web.parseWebGpuProbe
+import com.ugport.web.webGpuHintText
+import com.ugport.web.webGpuVerdict
 import com.ugport.web.WebMediaBridge
 import com.ugport.web.WebViewConfigurator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -110,6 +130,10 @@ fun WebScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val activity = LocalActivity.current ?: context.findActivity()
+    val fullscreenHost = remember(activity, viewModel.diagnostics) {
+        WebFullscreenHost(activity, viewModel.diagnostics)
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentTarget = rememberUpdatedState(target)
     val desktopUa = target.shortcut.desktopUa
@@ -136,6 +160,18 @@ fun WebScreen(
     // 控制台错误去重：第三方页面常连续输出同一条
     var lastConsoleKey by remember { mutableStateOf("") }
     var lastConsoleAt by remember { mutableStateOf(0L) }
+    // WebGPU 能力探针：token 标识页面代次，避免重定向后的旧回调覆盖新页面
+    var gpuPageToken by remember { mutableIntStateOf(0) }
+    var gpuProbedToken by remember { mutableIntStateOf(-1) }
+    var gpuProbe by remember { mutableStateOf<WebGpuProbeResult?>(null) }
+    var gpuDismissed by remember { mutableStateOf(false) }
+    var gpuLogSignature by remember { mutableStateOf("") }
+    // 右上角刷新/主页按钮 5 秒无操作后收起为右侧条状
+    var controlsExpanded by remember { mutableStateOf(true) }
+    var controlsReset by remember { mutableIntStateOf(0) }
+    val webViewVersion = remember(context) {
+        WebViewCompat.getCurrentWebViewPackage(context)?.versionName ?: "?"
+    }
 
     val fileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -275,54 +311,87 @@ fun WebScreen(
         }, if (attempt == 0) 1200L else 2000L)
     }
 
+    fun applyGpuProbe(result: WebGpuProbeResult) {
+        gpuProbe = result
+        val verdict = webGpuVerdict(result)
+        // pending 只更新状态，等最终结果再落日志，避免一次页面出现两行
+        if (result.adapter == GpuAdapterState.PENDING) return
+        val signature = buildString {
+            append(verdict.name).append('|')
+            append(result.secure).append('|')
+            append(result.protocol).append('|')
+            append(result.gpu).append('|')
+            append(result.adapter.name).append('|')
+            append(result.webgl2).append('|')
+            append(result.visible).append('|')
+            append(webViewVersion)
+        }
+        if (signature != gpuLogSignature) {
+            gpuLogSignature = signature
+            viewModel.diagnostics.log(
+                "webgpu: verdict=${verdict.name} secure=${result.secure} " +
+                    "protocol=${result.protocol} gpu=${result.gpu} " +
+                    "adapter=${result.adapter.name} webgl2=${result.webgl2} " +
+                    "visible=${result.visible} webview=$webViewVersion"
+            )
+        }
+        result.error?.takeIf { it.isNotBlank() }?.let { error ->
+            viewModel.diagnostics.detail(
+                "webgpu error: " + error.replace('\n', ' ').take(80)
+            )
+        }
+    }
+
+    fun readGpuProbe(view: WebView, token: Int, step: Int) {
+        val delay = GPU_PROBE_READ_DELAYS.getOrNull(step) ?: return
+        view.postDelayed({
+            if (token != gpuPageToken || webView !== view) return@postDelayed
+            view.evaluateJavascript(WebGpuProbe.readScript()) { raw ->
+                if (token != gpuPageToken || webView !== view) return@evaluateJavascript
+                val result = parseWebGpuProbe(raw) ?: return@evaluateJavascript
+                applyGpuProbe(result)
+                if (result.adapter == GpuAdapterState.PENDING) {
+                    readGpuProbe(view, token, step + 1)
+                }
+            }
+        }, delay)
+    }
+
+    fun probeWebGpu(view: WebView, url: String, token: Int) {
+        if (token != gpuPageToken || gpuProbedToken == token) return
+        if (errorText != null) return
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        gpuProbedToken = token
+        view.evaluateJavascript(WebGpuProbe.startScript()) { raw ->
+            if (token != gpuPageToken || webView !== view) return@evaluateJavascript
+            val result = parseWebGpuProbe(raw) ?: return@evaluateJavascript
+            applyGpuProbe(result)
+            if (result.gpu == true && result.adapter == GpuAdapterState.PENDING) {
+                readGpuProbe(view, token, 0)
+            }
+        }
+    }
+
+    LaunchedEffect(controlsExpanded, controlsReset) {
+        if (!controlsExpanded) return@LaunchedEffect
+        delay(CONTROLS_AUTO_HIDE_MS)
+        controlsExpanded = false
+    }
+
     BackHandler {
+        if (fullscreenHost.isActive) {
+            fullscreenHost.hide("back")
+            return@BackHandler
+        }
         val view = webView
         if (view != null && view.canGoBack()) view.goBack() else onBack()
     }
 
-    UgScaffold(
-        topBar = {
-            UgTopBar(
-                title = target.title,
-                onBack = onBack,
-                actions = {
-                    IconButton(onClick = { webView?.reload() }) {
-                        Icon(
-                            imageVector = Icons.Filled.Refresh,
-                            contentDescription = "刷新",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                    IconButton(onClick = { fillCredentials() }) {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = "填充账号密码",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                    IconButton(onClick = { openExternal(context, Uri.parse(target.url)) }) {
-                        Icon(
-                            imageVector = Icons.Filled.Share,
-                            contentDescription = "在浏览器打开",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp),
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            WebProgress(progress)
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+    Box(modifier = Modifier.fillMaxSize()) {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding(),
                     factory = { ctx ->
                         WebView(ctx).apply {
                             WebViewConfigurator.configure(this, desktopUa, mediaEnabled)
@@ -359,6 +428,9 @@ fun WebScreen(
                                     favicon: Bitmap?,
                                 ) {
                                     super.onPageStarted(view, url, favicon)
+                                    fullscreenHost.hide("page start")
+                                    gpuPageToken++
+                                    gpuProbe = null
                                     if (mediaEnabled) playback.onPageStarted()
                                     progress = 10
                                     if (url != null) {
@@ -390,6 +462,7 @@ fun WebScreen(
                                         scheduleBlankCheck(view, url)
                                         scheduleHeightFollowUp(view, url)
                                         scheduleStallReload(view, url)
+                                        probeWebGpu(view, url, gpuPageToken)
                                     }
                                     val current = currentTarget.value
                                     val nas = viewModel.repo.nas(current.nasId)
@@ -630,6 +703,7 @@ fun WebScreen(
                                     view: WebView?,
                                     detail: RenderProcessGoneDetail?,
                                 ): Boolean {
+                                    fullscreenHost.hide("renderer gone")
                                     errorText = "WebView 渲染进程已退出，请返回重试"
                                     viewModel.diagnostics.log("web: render process gone")
                                     if (mediaEnabled) playback.onRendererGone()
@@ -637,6 +711,26 @@ fun WebScreen(
                                 }
                             }
                             webChromeClient = object : WebChromeClient() {
+                                override fun onShowCustomView(
+                                    view: View?,
+                                    callback: WebChromeClient.CustomViewCallback?,
+                                ) {
+                                    if (view == null || callback == null) {
+                                        runCatching { callback?.onCustomViewHidden() }
+                                        return
+                                    }
+                                    val current = webView
+                                    if (current == null) {
+                                        runCatching { callback.onCustomViewHidden() }
+                                        return
+                                    }
+                                    fullscreenHost.show(current, view, callback)
+                                }
+
+                                override fun onHideCustomView() {
+                                    fullscreenHost.hide("web", notifyWebView = false)
+                                }
+
                                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                     progress = newProgress
                                 }
@@ -716,6 +810,31 @@ fun WebScreen(
                     update = { WebViewConfigurator.applyUaMode(it, desktopUa) },
                 )
 
+        WebProgress(
+            progress = progress,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding(),
+        )
+
+                val gpuHint = if (gpuDismissed) null else webGpuHintText(webGpuVerdict(gpuProbe))
+                // 外层是 Box，显式调用顶层 AnimatedVisibility，避免解析到其他作用域扩展
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = gpuHint != null && errorText == null,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { -it / 3 },
+                    exit = fadeOut(tween(160)),
+                ) {
+                    WebGpuHint(
+                        text = gpuHint.orEmpty(),
+                        onDismiss = { gpuDismissed = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(start = 12.dp, end = 12.dp, top = 64.dp, bottom = 10.dp),
+                    )
+                }
+
                 val currentError = errorText
                 if (currentError != null) {
                     Box(
@@ -774,6 +893,45 @@ fun WebScreen(
                         }
                     }
                 }
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = controlsExpanded,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 8.dp, end = 12.dp),
+            enter = fadeIn(tween(160)) + slideInHorizontally(tween(200)) { it / 3 },
+            exit = fadeOut(tween(120)) + slideOutHorizontally(tween(160)) { it / 3 },
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WebFab(
+                    icon = Icons.Filled.Refresh,
+                    contentDescription = "刷新",
+                    onClick = {
+                        webView?.reload()
+                        controlsReset++
+                    },
+                )
+                WebFab(
+                    icon = Icons.Filled.Home,
+                    contentDescription = "退出端口页",
+                    onClick = onBack,
+                )
+            }
+        }
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !controlsExpanded,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(top = 8.dp),
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(100)),
+        ) {
+            CollapsedControlsBar {
+                controlsExpanded = true
+                controlsReset++
             }
         }
     }
@@ -843,6 +1001,14 @@ fun WebScreen(
     }
 
     LaunchedEffect(target.url) {
+        fullscreenHost.hide("navigate")
+        controlsExpanded = true
+        controlsReset++
+        gpuPageToken++
+        gpuProbedToken = -1
+        gpuProbe = null
+        gpuDismissed = false
+        gpuLogSignature = ""
         if (mediaEnabled) {
             playback.onPageStarted()
         } else {
@@ -893,6 +1059,8 @@ fun WebScreen(
         }
         onDispose {
             playback.onPlaybackStarted = null
+            fullscreenHost.hide("dispose")
+            gpuPageToken++
             // 先断开媒体控制并停止前台服务，再销毁 WebView
             playback.detach(mediaControllerHolder[0])
             mediaControllerHolder[0] = null
@@ -905,6 +1073,10 @@ fun WebScreen(
 
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_DESTROY) {
+                fullscreenHost.hide("activity destroy")
+                return@LifecycleEventObserver
+            }
             if (!mediaEnabled) {
                 // 不允许后台播放：离开前台先暂停页面音频，再暂停 WebView 渲染与定时器
                 when (event) {
@@ -929,6 +1101,10 @@ fun WebScreen(
 }
 
 /** 关闭「允许后台播放」的端口在离开前台时调用，不依赖已注入的媒体脚本。 */
+private const val CONTROLS_AUTO_HIDE_MS = 5_000L
+
+private val GPU_PROBE_READ_DELAYS = longArrayOf(250L, 600L, 1200L, 1800L)
+
 private const val MEDIA_PAUSE_SCRIPT =
     "(function(){try{var m=document.querySelectorAll('audio,video');" +
         "for(var i=0;i<m.length;i++){try{m[i].pause();}catch(e){}}}catch(e){}})();"
@@ -1189,7 +1365,67 @@ private fun enqueueDownload(
 
 
 @Composable
-private fun WebProgress(progress: Int) {
+private fun CollapsedControlsBar(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(width = 44.dp, height = 48.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        val shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
+        val scrim = MaterialTheme.colorScheme.surface.copy(alpha = 0.60f)
+        Box(
+            modifier = Modifier
+                .width(8.dp)
+                .height(36.dp)
+                .background(scrim, shape)
+                .glass(shape, GlassLevel.Strong),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .height(14.dp)
+                    .background(
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                        CircleShape,
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebFab(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    val scrim = MaterialTheme.colorScheme.surface.copy(alpha = 0.60f)
+    GlassSurface(
+        modifier = Modifier
+            .size(48.dp)
+            .background(scrim, CircleShape),
+        shape = CircleShape,
+        level = GlassLevel.Strong,
+        onClick = onClick,
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WebProgress(progress: Int, modifier: Modifier = Modifier) {
     val animated by animateFloatAsState(
         targetValue = if (progress > 0) progress.coerceIn(0, 100) / 100f else 0f,
         animationSpec = tween(240, easing = LinearEasing),
@@ -1202,7 +1438,7 @@ private fun WebProgress(progress: Int) {
         label = "webProgressAlpha",
     )
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(2.dp),
     ) {
@@ -1226,4 +1462,14 @@ private fun openExternal(context: Context, uri: Uri) {
             Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
+}
+
+/** LocalActivity 为空时（测试或特殊宿主）沿 ContextWrapper 链找 Activity。 */
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
