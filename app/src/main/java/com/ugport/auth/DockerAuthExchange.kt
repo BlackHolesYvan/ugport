@@ -16,6 +16,11 @@ class DockerAuthExchange(
     private val client: OkHttpClient,
     private val diagnostics: Diagnostics,
 ) {
+    /**
+     * 请求一次性的 redirect_url，返回 `ugreen-proxy-token` 的值。
+     *
+     * 失败返回 null；redirect_url 只能使用一次，调用方不应重试同一个地址。
+     */
     suspend fun exchange(redirectUrl: String): String? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(redirectUrl)
@@ -27,7 +32,10 @@ class DockerAuthExchange(
             client.newCall(request).execute().use { response ->
                 val html = response.body?.string().orEmpty()
                 val cookie = COOKIE_PATTERN.find(html)?.groupValues?.getOrNull(1)
-                diagnostics.log("dockerAuth http=${response.code} cookie=${if (cookie.isNullOrBlank()) "none" else "present"}")
+                diagnostics.log(
+                    "dockerAuth http=${response.code} " +
+                        "cookie=${if (cookie.isNullOrBlank()) "none" else "present"}"
+                )
                 cookie
             }
         }.getOrElse {

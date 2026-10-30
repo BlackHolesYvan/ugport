@@ -33,7 +33,12 @@ enum class PlaybackCommand {
 
 /**
  * 页面播放状态的唯一汇合点：JS 上报、系统媒体控制、通知按钮都走这里。
- * 所有状态变更都切到主线程，避免 WebView 的 JavaBridge 线程直接操作 UI/服务。
+ *
+ * 线程：所有状态变更切到主线程，避免 WebView 的 JavaBridge 线程直接操作 UI/服务。
+ * 生命周期：前台服务由本类启动和停止，Service 自己不会 stopSelf；章节结束保持 PAUSED，
+ * 空闲 [ENDED_IDLE_STOP_MS] 后才停止。
+ * 续播：渲染进程退出时保存 [PendingResume]，WebView 重建后按标题匹配再 seek；
+ * 标题不一致时保持暂停，不自动出声。
  */
 class PlaybackHub(
     private val appContext: Context,
@@ -99,6 +104,7 @@ class PlaybackHub(
         }
     }
 
+    // region 宿主挂载与释放
     fun attach(controller: WebMediaController) {
         main.post {
             this.controller = controller
@@ -134,6 +140,7 @@ class PlaybackHub(
      * 页面导航/加载时不要立即拆前台服务：章节切换可能是一次整页导航，
      * 服务一停，后台就无法重新 startForegroundService。
      */
+    // region 页面生命周期与 JS 上报
     fun onPageStarted() {
         main.post {
             val current = _state.value
@@ -215,7 +222,8 @@ class PlaybackHub(
             val current = _state.value
             if (!current.hasMedia) return@post
             // 不要在这里取消 pendingStop：它可能是页面导航/终止状态的宽限计时，
-            // 页面重新上报 PLAYING/PAUSED 时自然会取消；盲目取消会让 BUFFERING 冻结状态永久停留。
+            // 页面重新上报 PLAYING/PAUSED 时自然会取消；
+    // 盲目取消会让 BUFFERING 冻结状态永久停留。
             if (current.phase != PlaybackPhase.ENDED) cancelEndedStop()
             if (!serviceStarted) ensureService(force = true)
             if (current.playing) startPolling()
@@ -326,6 +334,7 @@ class PlaybackHub(
         }
     }
 
+    // region 系统媒体命令
     fun command(command: PlaybackCommand, positionMs: Long? = null) {
         main.post {
             val current = controller
@@ -429,6 +438,7 @@ class PlaybackHub(
         }
     }
 
+    // region 进度、看门狗与续播
     private fun updateProgress(snapshot: PlaybackSnapshot, previous: PlaybackSnapshot, now: Long) {
         val phaseChanged = previous.phase != snapshot.phase
         val moved = snapshot.positionMs > lastPositionMs + 500 ||
@@ -571,6 +581,7 @@ class PlaybackHub(
         stopService()
     }
 
+    // region 前台服务
     private fun ensureService(force: Boolean = false) {
         if (serviceStarted) return
         val now = SystemClock.elapsedRealtime()
@@ -607,6 +618,7 @@ class PlaybackHub(
         main.removeCallbacks(pollRunnable)
     }
 
+    // region 日志
     private fun logTrustRejected() {
         val now = System.currentTimeMillis()
         if (now - lastTrustLogAt < 10_000) return
@@ -621,6 +633,8 @@ class PlaybackHub(
     private fun detail(message: String) {
         diagnostics.detail(message, TAG)
     }
+
+    // endregion
 
     private companion object {
         const val TAG = "UgPortMedia"

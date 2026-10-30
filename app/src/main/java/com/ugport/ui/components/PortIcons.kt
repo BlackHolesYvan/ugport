@@ -37,7 +37,11 @@ private data class IconRule(val keywords: List<String>, val icon: ImageVector)
 
 private val RULES = listOf(
     IconRule(
-        listOf("影视", "视频", "电影", "影院", "播放", "音乐", "听书", "video", "movie", "jellyfin", "emby", "plex", "music", "audio", "ting"),
+        listOf(
+        "影视", "视频", "电影", "影院", "播放",
+        "音乐", "听书", "video", "movie", "jellyfin",
+        "emby", "plex", "music", "audio", "ting",
+    ),
         Icons.Filled.PlayArrow,
     ),
     IconRule(

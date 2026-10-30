@@ -12,6 +12,17 @@ import androidx.webkit.WebViewFeature
 import com.ugport.BuildConfig
 import com.ugport.network.UgreenApi
 
+/**
+ * WebView 的统一配置入口。
+ *
+ * 安全边界：只有 [isTrustedHost] 认可的主机才允许 JS 桥、相机/麦克风与登录脚本；
+ * 文件访问和内容访问关闭，混合内容只允许兼容模式。
+ *
+ * 缓存策略：固定 [WebSettings.LOAD_NO_CACHE]。端口 WebUI 的 HTML 不带版本号，
+ * 命中旧缓存会出现「只剩骨架、脚本不执行」的白屏。
+ *
+ * UA 与视口由 [applyUaMode] 幂等设置，切换端口复用同一个 WebView 也不会串模式。
+ */
 object WebViewConfigurator {
 
     private val ERROR_HOOK_SCRIPT = """

@@ -15,6 +15,13 @@ import com.ugport.network.HttpFactory
 import com.ugport.network.UgreenApi
 import okhttp3.OkHttpClient
 
+/**
+ * 手写依赖容器，跟随 Application 生命周期。
+ *
+ * 所有字段都是单例：仓库、OkHttp、会话缓存、播放状态机必须共用，
+ * 否则会出现两个 SessionManager 各自登录、或前台服务与界面状态不一致。
+ * 启动时一次性创建，成本很低，不做懒加载。
+ */
 class AppContainer(context: Context) {
 
     val diagnostics = Diagnostics()

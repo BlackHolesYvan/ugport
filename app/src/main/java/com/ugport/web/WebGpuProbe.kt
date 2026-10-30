@@ -222,7 +222,8 @@ internal fun webGpuHintText(verdict: WebGpuVerdict): String? = when (verdict) {
     WebGpuVerdict.INSECURE_CONTEXT ->
         "当前页面不是安全上下文，WebGPU 不可用。"
     WebGpuVerdict.WEBVIEW_UNSUPPORTED ->
-        "当前 WebView 未启用 WebGPU，相关网页功能可能无法使用。可在应用商店更新 Android System WebView。"
+        "当前 WebView 未启用 WebGPU，相关网页功能可能无法使用。" +
+        "可在应用商店更新 Android System WebView。"
     WebGpuVerdict.GPU_UNAVAILABLE ->
         "当前设备无法提供 WebGPU 适配器，使用 WebGPU 的页面功能可能受限。"
     WebGpuVerdict.AVAILABLE,

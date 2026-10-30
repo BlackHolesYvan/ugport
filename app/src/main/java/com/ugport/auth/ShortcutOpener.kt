@@ -23,8 +23,8 @@ sealed interface OpenResult {
  *   所以不能把它交给 WebView 预加载，否则会与原生 Cookie 交换竞争。
  * - 网关端口（browserUrl）：`GET GetUid` 取 uid，拼到目标地址上。
  *
- * token 失效时自动重新授权一次。重授权只清内存缓存，持久化 token 保留到新 token 成功后再覆盖，
- * 避免一次网络失败就把长期 token 丢掉。
+ * token 失效时自动重新授权一次。重授权只清内存缓存，
+ * 持久化 token 保留到新 token 成功后再覆盖，避免一次网络失败就把长期 token 丢掉。
  */
 class ShortcutOpener(
     private val repo: ProfileRepository,

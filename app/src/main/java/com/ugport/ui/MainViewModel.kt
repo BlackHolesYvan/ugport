@@ -34,6 +34,18 @@ data class OtpPrompt(
     val shortcut: Shortcut? = null,
 )
 
+/**
+ * 首页与端口页共享的状态和打开流程。
+ *
+ * 打开端口依次经过：读取配置 → 确保会话 → 解析域名 →
+ * 换取 dockerToken/uid → 产出 [WebTarget]。
+ *
+ * 并发保护：
+ * - [prepareMutex] 串行化 dockerToken 交换，避免一次性 redirect_url 被并发消费；
+ * - [webTokenLock] 与 [nativeReauthLock] 保证 WebView 回调、登录页兜底最多触发一次重授权。
+ *
+ * OTP：登录返回 enable_otp 时挂起为 [OtpPrompt]，界面收集验证码后继续。
+ */
 class MainViewModel(private val container: AppContainer) : ViewModel() {
 
     val repo = container.repo

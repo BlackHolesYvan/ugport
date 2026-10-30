@@ -11,7 +11,10 @@ import javax.crypto.spec.GCMParameterSpec
 
 /**
  * 使用 Android Keystore 中的 AES-256-GCM 密钥加密敏感字段。
- * 密文格式: Base64(IV(12B) + ciphertext)
+ *
+ * 密文格式：Base64(IV(12B) + ciphertext)。
+ * [encrypt] 失败返回空串，[decrypt] 失败返回 null；调用方把两者都当作「未保存」，
+ * 不要抛出异常打断保存流程（换机、Keystore 被重置都会走到这里）。
  */
 class KeystoreCipher {
 

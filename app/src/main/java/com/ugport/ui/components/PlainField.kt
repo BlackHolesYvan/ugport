@@ -54,7 +54,13 @@ fun PlainField(
             enabled = enabled,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = scheme.onSurface),
             placeholder = placeholder?.let {
-                { Text(it, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant.copy(alpha = 0.55f)) }
+                {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodyLarge,
+            color = scheme.onSurfaceVariant.copy(alpha = 0.55f),
+        )
+    }
             },
             singleLine = singleLine,
             visualTransformation = visualTransformation,

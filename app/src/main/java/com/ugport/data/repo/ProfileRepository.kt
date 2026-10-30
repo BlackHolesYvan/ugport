@@ -16,6 +16,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * 应用数据的唯一写入口。
+ *
+ * - [state] 是内存快照，UI 直接订阅；[data] 是 DataStore 的原始 Flow。
+ * - 账号密码与 token 写入前用 [KeystoreCipher] 加密，AAD 绑定 `nas:<id>:password|token`，
+ *   把密文复制到另一台 NAS 无法解密。
+ * - 编辑 NAS 时保留已保存的 token，只有连接标识变化才清空，
+ *   避免改个名字就要重新登录。
+ */
 class ProfileRepository(
     private val store: ProfileStore,
     private val cipher: KeystoreCipher,

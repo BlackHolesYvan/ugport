@@ -17,8 +17,10 @@ sealed interface SessionResult {
 /**
  * 单台 NAS 的登录会话管理。
  *
- * token 语义：登录返回的 keepalive token 可以长期复用，因此只要有内存或本地缓存就直接使用，
- * 不再每次打开端口都调用 is_login；只有接口返回 1024/1010/401，或页面落到登录页时才强制重新授权。
+ * token 语义：登录返回的 keepalive token 可以长期复用，
+ * 因此只要有内存或本地缓存就直接使用，
+ * 不再每次打开端口都调用 is_login；只有接口返回 1024/1010/401，
+ * 或页面落到登录页时才强制重新授权。
  *
  * 并发：每台 NAS 一把 [Mutex]，避免同时打开多个端口时重复登录。
  * 失败策略：连续失败 [MAX_FAILURES] 次后冷却 [COOLDOWN_MS]，避免把账号刷进风控。
@@ -42,7 +44,8 @@ class SessionManager(
             val nas = repo.nas(nasId) ?: return@withLock SessionResult.Failure("NAS 配置不存在")
 
             // keepalive 登录返回的 token 可以长期使用：有 token 就直接用，
-            // 不再每次打开端口都调用 is_login 校验；只有接口返回 1024 或页面跳到登录页时才重新授权。
+            // 不再每次打开端口都调用 is_login 校验；
+    // 只有接口返回 1024 或页面跳到登录页时才重新授权。
             if (!force) {
                 tokenCache[nasId]?.let {
                     diagnostics.log("session: use memory token (nas=${nasId.take(8)})")

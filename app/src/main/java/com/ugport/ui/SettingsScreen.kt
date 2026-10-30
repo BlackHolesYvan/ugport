@@ -172,7 +172,8 @@ fun SettingsScreen(
             item {
                 SectionCard(
                     title = "后台播放",
-                    footer = "部分国产系统还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
+                    footer = "部分国产系统还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，" +
+                        "并允许自启动；最近任务可下拉锁定。",
                 ) {
                     SettingRow(
                         title = if (ignoringBattery) "已允许后台运行" else "未允许后台运行",
@@ -248,7 +249,8 @@ fun SettingsScreen(
     if (clearTarget != null) {
         ConfirmDialog(
             title = "清除登录状态",
-            message = "将清除「" + clearTarget.name + "」在本机保存的凭证，下次打开端口会重新登录。",
+            message = "将清除「" + clearTarget.name + "」在本机保存的凭证，" +
+        "下次打开端口会重新登录。",
             confirmText = "清除",
             destructive = true,
             onConfirm = {

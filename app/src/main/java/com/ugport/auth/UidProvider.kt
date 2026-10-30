@@ -5,6 +5,13 @@ import com.ugport.network.Diagnostics
 import com.ugport.network.UgreenApi
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * 网关端口需要的 uid。
+ *
+ * uid 与 NAS、登录态绑定，缓存 [TTL_MS]（30 分钟）。
+ * 第一次取失败视为 token 可能失效：清内存缓存并强制重登一次，再取一次；
+ * 仍失败返回 null，由调用方决定是否直接加载不带 uid 的地址。
+ */
 class UidProvider(
     private val repo: ProfileRepository,
     private val sessions: SessionManager,

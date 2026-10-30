@@ -3,10 +3,19 @@ package com.ugport.web
 import org.json.JSONObject
 
 /**
- * 注入到页面的媒体探测脚本。只上报状态，不暴露任何控制入口；
- * 控制命令只能由原生通过 __ugMediaCommand 下发。
+ * 注入到页面的媒体探测脚本。只上报状态，不暴露任意 JS 执行入口。
+ *
+ * 数据方向：
+ * - JS → Kotlin：状态变化或每秒一次，通过 `window.UgMedia.post(json)` 上报
+ *   [com.ugport.media.PlaybackSnapshot] 对应字段。
+ * - Kotlin → JS：通过 `__ugMediaCommand(json)` 下发 play/pause/seek/next/previous/resume。
+ *
+ * 升级脚本协议时必须同步 [VERSION]，否则页面上残留的旧脚本不会重新注入。
  */
 object MediaHookScript {
+
+    /** 脚本协议版本；修改上报字段或命令语义时 +1。 */
+    const val VERSION = 5
 
     fun inject(): String = SCRIPT
 
@@ -31,8 +40,8 @@ object MediaHookScript {
 
     private val SCRIPT = """
         (function () {
-          if (window.__ugMediaVersion >= 5) return;
-          window.__ugMediaVersion = 5;
+          if (window.__ugMediaVersion >= ${VERSION}) return;
+          window.__ugMediaVersion = ${VERSION};
 
           var EVENTS = ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'durationchange',
                         'timeupdate', 'volumechange', 'waiting', 'stalled', 'error', 'emptied',
@@ -382,7 +391,10 @@ object MediaHookScript {
             tryResume();
           }
 
-          /** 只取页面自己写入 MediaSession 的标题，document.title 常用于站点名，不能用来判断章节。 */
+          /**
+     * 只取页面自己写入 MediaSession 的标题。
+     * document.title 常用于站点名，不能用来判断章节是否一致。
+     */
           function mediaTitle() {
             try {
               var md = navigator.mediaSession && navigator.mediaSession.metadata;
