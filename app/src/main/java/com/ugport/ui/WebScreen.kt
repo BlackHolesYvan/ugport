@@ -11,7 +11,11 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
@@ -73,6 +77,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,10 +118,8 @@ import com.ugport.web.webGpuVerdict
 import com.ugport.web.WebMediaBridge
 import com.ugport.web.WebViewConfigurator
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -169,6 +172,15 @@ fun WebScreen(
     // 右上角刷新/主页按钮 5 秒无操作后收起为右侧条状
     var controlsExpanded by remember { mutableStateOf(true) }
     var controlsReset by remember { mutableIntStateOf(0) }
+    // 渲染进程退出后的恢复：webGeneration 变化会让 AndroidView 重新创建 WebView
+    var webGeneration by remember { mutableIntStateOf(0) }
+    var rendererDead by remember { mutableStateOf(false) }
+    var recovering by remember { mutableStateOf(false) }
+    var showRendererHint by remember { mutableStateOf(false) }
+    var disposed by remember { mutableStateOf(false) }
+    var pendingRestoreUrl by remember { mutableStateOf<String?>(null) }
+    val rebuildStamps = remember { ArrayDeque<Long>() }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val webViewVersion = remember(context) {
         WebViewCompat.getCurrentWebViewPackage(context)?.versionName ?: "?"
     }
@@ -243,6 +255,7 @@ fun WebScreen(
     fun scheduleBlankCheck(view: WebView, url: String) {
         if (blankRetriedUrl == url) return
         view.postDelayed({
+            if (view !== webView) return@postDelayed
             if (playback.isPlaying) return@postDelayed
             if (view.url == url && blankRetriedUrl != url) {
                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { result ->
@@ -253,6 +266,7 @@ fun WebScreen(
                         )
                         // 给前端留出初始化时间，二次确认后再动缓存
                         view.postDelayed({
+                            if (view !== webView) return@postDelayed
                             if (playback.isPlaying) return@postDelayed
                             if (view.url == url && blankRetriedUrl != url) {
                                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { second ->
@@ -279,6 +293,7 @@ fun WebScreen(
     fun scheduleStallReload(view: WebView, url: String) {
         if (stallRetriedUrl == url) return
         view.postDelayed({
+            if (view !== webView) return@postDelayed
             if (playback.isPlaying) return@postDelayed
             if (view.url == url && stallRetriedUrl != url) {
                 view.evaluateJavascript(STALL_SCRIPT) { result ->
@@ -299,7 +314,7 @@ fun WebScreen(
     fun scheduleHeightFollowUp(view: WebView, url: String, attempt: Int = 0) {
         if (attempt >= 2) return
         view.postDelayed({
-            if (view.url != url) return@postDelayed
+            if (view !== webView || view.url != url) return@postDelayed
             view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
                 if (result?.trim('"') == "short") {
                     view.evaluateJavascript(PAGE_INFO_SCRIPT) { info ->
@@ -372,6 +387,88 @@ fun WebScreen(
         }
     }
 
+    fun markRendererHintShown() {
+        context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("renderer_hint_shown", true)
+            .apply()
+    }
+
+    /** 渲染进程退出且电池优化已放行时，提示用户去系统里「锁定后台」。 */
+    fun showRendererHintIfNeeded() {
+        if (!BatteryOptimization.isIgnoring(context)) return
+        val prefs = context.getSharedPreferences("ugport_webview", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("renderer_hint_shown", false)) return
+        showRendererHint = true
+    }
+
+    /**
+     * 销毁已失效的 WebView 并让 Compose 重新创建实例。
+     * 只在渲染进程退出/无响应时调用；不做 detach（那会清掉续播位置）。
+     */
+    fun rebuildWebView(reason: String) {
+        if (disposed) return
+        if (activity?.isDestroyed == true) return
+        if (lifecycle.currentState == Lifecycle.State.DESTROYED) return
+        val now = SystemClock.elapsedRealtime()
+        while (rebuildStamps.isNotEmpty() && now - rebuildStamps.first() > REBUILD_WINDOW_MS) {
+            rebuildStamps.removeFirst()
+        }
+        if (reason != "retry" && rebuildStamps.size >= MAX_REBUILDS) {
+            rendererDead = true
+            recovering = false
+            errorText = "页面渲染进程反复退出，请返回重试"
+            viewModel.diagnostics.log("web: rebuild limit reached ($reason)")
+            return
+        }
+        if (reason == "retry") rebuildStamps.clear()
+        rebuildStamps.addLast(now)
+
+        val old = webView
+        // 一次性鉴权地址不能重放，否则会 400；其余地址优先原样恢复
+        pendingRestoreUrl = runCatching { old?.url }.getOrNull()
+            ?.takeIf {
+                (it.startsWith("http://") || it.startsWith("https://")) &&
+                    !it.contains("/api/ugreen/auth")
+            }
+        webView = null
+        mediaControllerHolder[0]?.let { playback.release(it) }
+        mediaControllerHolder[0] = null
+        if (old != null) {
+            // 官方要求先移出视图树再 destroy，否则可能泄漏
+            runCatching { (old.parent as? ViewGroup)?.removeView(old) }
+            runCatching { old.stopLoading() }
+            runCatching { old.destroy() }
+        }
+        rendererDead = false
+        recovering = true
+        errorText = null
+        progress = 10
+        webGeneration++
+        viewModel.diagnostics.log("web: rebuild ($reason)")
+    }
+
+    /** 回前台时用一次 JS 回声确认渲染进程是否还活着。 */
+    fun probeRendererAlive(view: WebView) {
+        if (view !== webView) return
+        val loaded = runCatching { view.url }.getOrNull()
+        if (loaded.isNullOrEmpty() || !loaded.startsWith("http")) return
+        var answered = false
+        val sent = runCatching {
+            view.evaluateJavascript("1") { answered = true }
+            true
+        }.getOrDefault(false)
+        if (!sent) {
+            mainHandler.post { rebuildWebView("eval failed") }
+            return
+        }
+        mainHandler.postDelayed({
+            if (answered || view !== webView) return@postDelayed
+            viewModel.diagnostics.log("web: renderer unresponsive")
+            rebuildWebView("unresponsive")
+        }, RENDERER_PROBE_MS)
+    }
+
     LaunchedEffect(controlsExpanded, controlsReset) {
         if (!controlsExpanded) return@LaunchedEffect
         delay(CONTROLS_AUTO_HIDE_MS)
@@ -388,6 +485,8 @@ fun WebScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // 渲染进程退出后 webGeneration 变化，整块 AndroidView 重新创建
+        key(webGeneration) {
                 AndroidView(
                     modifier = Modifier
                         .fillMaxSize()
@@ -395,6 +494,16 @@ fun WebScreen(
                     factory = { ctx ->
                         WebView(ctx).apply {
                             WebViewConfigurator.configure(this, desktopUa, mediaEnabled)
+                            if (mediaEnabled) {
+                                // 允许后台播放的端口常驻高优先级：切章瞬间 hasMedia 会短暂为 false，
+                                // 一旦掉回 BOUND，渲染进程在后台更容易被系统回收
+                                runCatching {
+                                    setRendererPriorityPolicy(
+                                        WebView.RENDERER_PRIORITY_IMPORTANT,
+                                        false,
+                                    )
+                                }
+                            }
                             addJavascriptInterface(
                                 WebBridge { token ->
                                     val current = currentTarget.value
@@ -404,8 +513,18 @@ fun WebScreen(
                             )
                             if (mediaEnabled) {
                                 val mediaController = object : WebMediaController {
+                                    private var released = false
+
+                                    override fun release() {
+                                        released = true
+                                    }
+
                                     override fun evaluate(script: String) {
-                                        post { runCatching { evaluateJavascript(script, null) } }
+                                        if (released) return
+                                        post {
+                                            if (released) return@post
+                                            runCatching { evaluateJavascript(script, null) }
+                                        }
                                     }
 
                                     override fun isTrustedPage(): Boolean {
@@ -428,6 +547,7 @@ fun WebScreen(
                                     favicon: Bitmap?,
                                 ) {
                                     super.onPageStarted(view, url, favicon)
+                                    if (view !== webView) return
                                     fullscreenHost.hide("page start")
                                     gpuPageToken++
                                     gpuProbe = null
@@ -441,9 +561,11 @@ fun WebScreen(
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
+                                    if (view == null || url == null || view !== webView) return
                                     progress = 100
-                                    if (view == null || url == null) return
                                     if (view.url == url) {
+                                        rendererDead = false
+                                        recovering = false
                                         view.evaluateJavascript(PAGE_INFO_SCRIPT) { result ->
                                             viewModel.diagnostics.detail(
                                                 "web page: ${viewModel.diagnostics.redactUrl(result.orEmpty())}"
@@ -452,7 +574,8 @@ fun WebScreen(
                                         if (mediaEnabled) {
                                             playback.onPageLoaded()
                                             view.post {
-                                                view.evaluateJavascript("window.__ugMediaVersion === 4") { result ->
+                                                if (view !== webView) return@post
+                                                view.evaluateJavascript("window.__ugMediaVersion === 5") { result ->
                                                     viewModel.diagnostics.detail(
                                                         "web: media hook=" + (result?.trim('"') ?: "?")
                                                     )
@@ -481,6 +604,7 @@ fun WebScreen(
                                             autoFillCount++
                                             // 原生重授权通常 1-2 秒完成；4 秒后仍停在登录页再自动填充
                                             view.postDelayed({
+                                                if (view !== webView) return@postDelayed
                                                 if (!viewModel.busy && viewModel.otpPrompt == null &&
                                                     UrlTools.isUgreenLoginUrl(view.url, relayHost)
                                                 ) {
@@ -488,6 +612,7 @@ fun WebScreen(
                                                 }
                                             }, 4000L)
                                             view.postDelayed({
+                                                if (view !== webView) return@postDelayed
                                                 if (!viewModel.busy && viewModel.otpPrompt == null &&
                                                     UrlTools.isUgreenLoginUrl(view.url, relayHost)
                                                 ) {
@@ -529,12 +654,14 @@ fun WebScreen(
                                         if (n > 0) viewModel.diagnostics.detail("web: spa vhFix=$n")
                                     }
                                     view.postDelayed({
+                                        if (view !== webView) return@postDelayed
                                         view.evaluateJavascript(VH_FIX_SCRIPT) { result ->
                                             val n = result?.trim('"')?.toIntOrNull() ?: 0
                                             if (n > 0) viewModel.diagnostics.detail("web: spa vhFix=$n (late)")
                                         }
                                     }, 600L)
                                     view.postDelayed({
+                                        if (view !== webView) return@postDelayed
                                         view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
                                             if (result?.trim('"') == "short") {
                                                 view.evaluateJavascript(PAGE_INFO_SCRIPT) { info ->
@@ -704,9 +831,31 @@ fun WebScreen(
                                     detail: RenderProcessGoneDetail?,
                                 ): Boolean {
                                     fullscreenHost.hide("renderer gone")
-                                    errorText = "WebView 渲染进程已退出，请返回重试"
-                                    viewModel.diagnostics.log("web: render process gone")
+                                    // 重建时销毁旧实例也可能触发这个回调，别影响新一次播放
+                                    if (view !== webView) {
+                                        viewModel.diagnostics.detail("web: renderer gone (stale)")
+                                        return true
+                                    }
+                                    val crashed = detail?.didCrash() ?: false
+                                    val priority = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                        detail?.rendererPriorityAtExit()?.toString() ?: "?"
+                                    } else {
+                                        "?"
+                                    }
+                                    viewModel.diagnostics.log(
+                                        "web: renderer gone crash=" + crashed + " prio=" + priority
+                                    )
                                     if (mediaEnabled) playback.onRendererGone()
+                                    rendererDead = true
+                                    errorText = null
+                                    if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                                        // 不要在回调栈内 destroy，挪到下一轮消息里重建
+                                        mainHandler.post { rebuildWebView("renderer gone") }
+                                    } else {
+                                        // 后台先保留状态与通知，回前台再重建
+                                        recovering = true
+                                        showRendererHintIfNeeded()
+                                    }
                                     return true
                                 }
                             }
@@ -809,6 +958,7 @@ fun WebScreen(
                     // WebView 会被复用：切换端口时在此同步 UA / 视口模式
                     update = { WebViewConfigurator.applyUaMode(it, desktopUa) },
                 )
+        }
 
         WebProgress(
             progress = progress,
@@ -817,10 +967,26 @@ fun WebScreen(
                 .statusBarsPadding(),
         )
 
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = recovering && errorText == null,
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { -it / 3 },
+                    exit = fadeOut(tween(160)),
+                ) {
+                    WebGpuHint(
+                        text = "网页进程被系统回收，正在恢复…",
+                        onDismiss = { recovering = false },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(start = 12.dp, end = 12.dp, top = 64.dp, bottom = 10.dp),
+                    )
+                }
+
                 val gpuHint = if (gpuDismissed) null else webGpuHintText(webGpuVerdict(gpuProbe))
                 // 外层是 Box，显式调用顶层 AnimatedVisibility，避免解析到其他作用域扩展
                 androidx.compose.animation.AnimatedVisibility(
-                    visible = gpuHint != null && errorText == null,
+                    visible = gpuHint != null && errorText == null && !recovering,
                     modifier = Modifier.align(Alignment.TopCenter),
                     enter = fadeIn(tween(180)) + slideInVertically(tween(220)) { -it / 3 },
                     exit = fadeOut(tween(160)),
@@ -886,7 +1052,7 @@ fun WebScreen(
                                 Button(
                                     onClick = {
                                         errorText = null
-                                        webView?.reload()
+                                        rebuildWebView("retry")
                                     },
                                 ) { Text("重试") }
                             }
@@ -908,7 +1074,7 @@ fun WebScreen(
                     icon = Icons.Filled.Refresh,
                     contentDescription = "刷新",
                     onClick = {
-                        webView?.reload()
+                        if (rendererDead) rebuildWebView("refresh") else webView?.reload()
                         controlsReset++
                     },
                 )
@@ -989,7 +1155,8 @@ fun WebScreen(
         ConfirmDialog(
             title = "后台播放保护",
             message = "为了避免锁屏或切到后台后被系统中断，建议允许绿联快连忽略电池优化。\n\n" +
-                "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动。",
+                "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；" +
+                "最近任务界面下拉应用卡片可锁定后台。",
             confirmText = "去设置",
             dismissText = "以后再说",
             onConfirm = {
@@ -1000,7 +1167,27 @@ fun WebScreen(
         )
     }
 
-    LaunchedEffect(target.url) {
+    if (showRendererHint) {
+        ConfirmDialog(
+            title = "后台播放被系统打断",
+            message = "系统回收了网页进程，播放会中断。\n\n" +
+                "建议在最近任务界面下拉绿联快连的卡片锁定后台，" +
+                "并确认省电策略为「无限制」、允许自启动。",
+            confirmText = "去应用详情",
+            dismissText = "知道了",
+            onConfirm = {
+                showRendererHint = false
+                markRendererHintShown()
+                BatteryOptimization.openAppDetails(context)
+            },
+            onDismiss = {
+                showRendererHint = false
+                markRendererHintShown()
+            },
+        )
+    }
+
+    LaunchedEffect(target.url, webGeneration) {
         fullscreenHost.hide("navigate")
         controlsExpanded = true
         controlsReset++
@@ -1020,6 +1207,9 @@ fun WebScreen(
         val view = snapshotFlow { webView }.filterNotNull().first()
         WebViewConfigurator.applyUaMode(view, desktopUa)
         val loadUrl = viewModel.prepareDockerRedirect(target)
+        // 重建时优先回到旧页面地址（保住 SPA 路由/章节），否则用鉴权后的入口路径
+        val restore = pendingRestoreUrl
+        pendingRestoreUrl = null
         seedCookies(cookieJar, target.url)
         errorText = null
         progress = 10
@@ -1030,35 +1220,30 @@ fun WebScreen(
         // 无论 WebView 之前是否已经加载过目标地址，拿到 Cookie 后都重新加载一次，
         // 避免第一次无 Cookie 的请求把页面渲染成空白/未登录状态。
         // 用当前生效的 UA（移动端为系统默认 UA，桌面端为 DESKTOP_UA）
-        view.loadUrl(loadUrl, mapOf("User-Agent" to view.settings.userAgentString))
+        view.loadUrl(restore ?: loadUrl, mapOf("User-Agent" to view.settings.userAgentString))
     }
 
+    // 允许后台播放的端口常驻高优先级，不随 hasMedia 降级（切章瞬间最容易掉优先级）
     LaunchedEffect(webView) {
         if (!mediaEnabled) return@LaunchedEffect
         val view = webView ?: return@LaunchedEffect
-        playback.state
-            .map { it.hasMedia }
-            .distinctUntilChanged()
-            .collect { hasMedia ->
-                runCatching {
-                    view.setRendererPriorityPolicy(
-                        if (hasMedia) {
-                            WebView.RENDERER_PRIORITY_IMPORTANT
-                        } else {
-                            WebView.RENDERER_PRIORITY_BOUND
-                        },
-                        false,
-                    )
-                }
-            }
+        runCatching {
+            view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
     }
 
     DisposableEffect(Unit) {
         if (mediaEnabled) {
             playback.onPlaybackStarted = { requestNotificationPermissionIfNeeded() }
+            playback.onRebuildRequested = { reason ->
+                mainHandler.post { rebuildWebView(reason) }
+            }
         }
         onDispose {
+            disposed = true
             playback.onPlaybackStarted = null
+            playback.onRebuildRequested = null
+            mainHandler.removeCallbacksAndMessages(null)
             fullscreenHost.hide("dispose")
             gpuPageToken++
             // 先断开媒体控制并停止前台服务，再销毁 WebView
@@ -1066,7 +1251,10 @@ fun WebScreen(
             mediaControllerHolder[0] = null
             fileCallback?.onReceiveValue(null)
             fileCallback = null
-            webView?.destroy()
+            webView?.let { view ->
+                runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                runCatching { view.destroy() }
+            }
             webView = null
         }
     }
@@ -1088,9 +1276,29 @@ fun WebScreen(
                     else -> Unit
                 }
             } else if (event == Lifecycle.Event.ON_START) {
-                // inject 是幂等的，页面在后台重载/渲染进程恢复后补一次注入
-                webView?.evaluateJavascript(MediaHookScript.inject(), null)
-                webView?.evaluateJavascript(MediaHookScript.probe(), null)
+                val view = webView
+                if (view != null && !rendererDead) {
+                    if (mediaEnabled) {
+                        runCatching {
+                            view.setRendererPriorityPolicy(
+                                WebView.RENDERER_PRIORITY_IMPORTANT,
+                                false,
+                            )
+                        }
+                    }
+                    // 只在「状态说在播放、却很久没有上报」时回声确认，
+                    // 避免正常暂停/阅读时误判重建
+                    if (playback.isPlaying &&
+                        !playback.hasRecentReport(RENDERER_REPORT_WINDOW_MS)
+                    ) {
+                        probeRendererAlive(view)
+                    }
+                    // inject 是幂等的，页面在后台重载/渲染进程恢复后补一次注入
+                    runCatching { view.evaluateJavascript(MediaHookScript.inject(), null) }
+                    runCatching { view.evaluateJavascript(MediaHookScript.probe(), null) }
+                } else if (rendererDead) {
+                    mainHandler.post { rebuildWebView("onstart") }
+                }
                 playback.onHostResumed()
                 if (playback.isPlaying) requestNotificationPermissionIfNeeded()
             }
@@ -1102,6 +1310,16 @@ fun WebScreen(
 
 /** 关闭「允许后台播放」的端口在离开前台时调用，不依赖已注入的媒体脚本。 */
 private const val CONTROLS_AUTO_HIDE_MS = 5_000L
+
+/** 回前台时 JS 回声探测的等待时间。 */
+private const val RENDERER_PROBE_MS = 4_000L
+
+/** 距上次页面播放上报在这个时间内，视为页面仍然活着，不再探测。 */
+private const val RENDERER_REPORT_WINDOW_MS = 15_000L
+
+/** 渲染进程反复退出时，10 分钟内最多自动重建 3 次。 */
+private const val REBUILD_WINDOW_MS = 10 * 60_000L
+private const val MAX_REBUILDS = 3
 
 private val GPU_PROBE_READ_DELAYS = longArrayOf(250L, 600L, 1200L, 1800L)
 

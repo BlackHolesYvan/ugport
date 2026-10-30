@@ -15,10 +15,24 @@ object MediaHookScript {
     fun command(json: String): String =
         "window.__ugMediaCommand && window.__ugMediaCommand(" + JSONObject.quote(json) + ");"
 
+    /**
+     * 页面重建后续播：脚本会等到音频元素出现再 seek + play。
+     * 标题对不上时不 seek 也不自动播放，交给用户决定。
+     */
+    fun resume(positionMs: Long, title: String, ttlMs: Long = 120_000L): String {
+        val json = JSONObject()
+            .put("cmd", "resume")
+            .put("pos", positionMs.coerceAtLeast(0L))
+            .put("title", title.take(120))
+            .put("ttl", ttlMs)
+            .toString()
+        return command(json)
+    }
+
     private val SCRIPT = """
         (function () {
-          if (window.__ugMediaVersion >= 4) return;
-          window.__ugMediaVersion = 4;
+          if (window.__ugMediaVersion >= 5) return;
+          window.__ugMediaVersion = 5;
 
           var EVENTS = ['play', 'playing', 'pause', 'ended', 'loadedmetadata', 'durationchange',
                         'timeupdate', 'volumechange', 'waiting', 'stalled', 'error', 'emptied',
@@ -247,7 +261,7 @@ object MediaHookScript {
               } catch (e) {}
               var playing = msState === 'playing';
               return {
-                v: 4, has: false, playing: playing,
+                v: 5, has: false, playing: playing,
                 state: playing ? 'playing' : (msState === 'paused' ? 'paused' : 'none'),
                 pos: 0, dur: 0, rate: 1, kind: 'audio',
                 canPrev: caps.msPrev, canNext: caps.msNext,
@@ -265,7 +279,7 @@ object MediaHookScript {
             // 直播流 duration=Infinity，没有可切曲目，隐藏上一首/下一首
             var live = rawDuration === Infinity;
             return {
-              v: 4, has: true, playing: active, state: state,
+              v: 5, has: true, playing: active, state: state,
               pos: Math.max(0, Math.round(finite(el.currentTime, 0) * 1000)),
               dur: Math.round(duration * 1000),
               rate: finite(el.playbackRate, 1),
@@ -365,6 +379,82 @@ object MediaHookScript {
                 schedule(120);
               }
             }
+            tryResume();
+          }
+
+          /** 只取页面自己写入 MediaSession 的标题，document.title 常用于站点名，不能用来判断章节。 */
+          function mediaTitle() {
+            try {
+              var md = navigator.mediaSession && navigator.mediaSession.metadata;
+              if (md) return text(md.title, 160);
+            } catch (e) {}
+            return '';
+          }
+
+          function resumeTitleMatches() {
+            var job = window.__ugResume;
+            if (!job) return false;
+            var want = job.title || '';
+            var cur = mediaTitle();
+            if (!want || !cur) return true;
+            return cur === want || cur.indexOf(want) >= 0 || want.indexOf(cur) >= 0;
+          }
+
+          /** 页面自己调用 play 时先把位置补上，避免从本章开头出声。 */
+          function preResumeSeek(el) {
+            var job = window.__ugResume;
+            if (!job || !el) return;
+            if (!resumeTitleMatches()) return;
+            var pos = finite(job.pos, 0);
+            if (pos <= 0) return;
+            try {
+              if (isFinite(el.duration) && el.duration > 0) {
+                pos = Math.min(pos, Math.max(0, el.duration - 2000));
+              }
+              el.currentTime = pos / 1000;
+            } catch (e) {}
+          }
+
+          function tryResume() {
+            var job = window.__ugResume;
+            if (!job) return;
+            if (Date.now() > job.until) {
+              window.__ugResume = null;
+              return;
+            }
+            var el = pick() || lastActiveEl;
+            if (!el) return;
+            if (!resumeTitleMatches()) {
+              // 章节对不上：不 seek 也不自动播放
+              window.__ugResume = null;
+              send(true);
+              return;
+            }
+            var pos = finite(job.pos, 0);
+            var apply = function () {
+              window.__ugResume = null;
+              if (pos > 0) {
+                try {
+                  if (isFinite(el.duration) && el.duration > 0) {
+                    pos = Math.min(pos, Math.max(0, el.duration - 2000));
+                  }
+                  el.currentTime = pos / 1000;
+                } catch (e) {}
+              }
+              safePlay(el);
+            };
+            if (pos <= 0 || el.readyState >= 1) {
+              apply();
+            } else {
+              try {
+                el.addEventListener('loadedmetadata', function onMeta() {
+                  el.removeEventListener('loadedmetadata', onMeta);
+                  apply();
+                });
+              } catch (e) {
+                apply();
+              }
+            }
           }
 
           function allMedia() {
@@ -455,6 +545,13 @@ object MediaHookScript {
                     return 'error';
                   }
                 }
+              } else if (cmd === 'resume') {
+                window.__ugResume = {
+                  pos: Math.max(0, finite(command.pos, 0)),
+                  title: text(command.title, 120),
+                  until: Date.now() + Math.max(1000, finite(command.ttl, 120000))
+                };
+                tryResume();
               } else if (cmd === 'recover') {
                 var target = pick() || lastActiveEl;
                 if (!target) return 'no-media';
@@ -499,6 +596,7 @@ object MediaHookScript {
             var originalPlay = HTMLMediaElement.prototype.play;
             HTMLMediaElement.prototype.play = function () {
               try { hook(this); } catch (e) {}
+              try { preResumeSeek(this); } catch (e) {}
               return originalPlay.apply(this, arguments);
             };
           } catch (e) {}
@@ -552,7 +650,7 @@ object MediaHookScript {
             var api = bridge();
             if (!api || !api.postState) return;
             try {
-              api.postState('{"v":4,"has":false,"playing":false,"state":"none","pos":0,"dur":0,"canPrev":false,"canNext":false}');
+              api.postState('{"v":5,"has":false,"playing":false,"state":"none","pos":0,"dur":0,"canPrev":false,"canNext":false}');
             } catch (e) {}
           });
         })();

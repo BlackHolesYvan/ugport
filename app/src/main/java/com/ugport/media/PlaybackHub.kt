@@ -15,6 +15,9 @@ import kotlinx.coroutines.flow.asStateFlow
 interface WebMediaController {
     fun evaluate(script: String)
     fun isTrustedPage(): Boolean
+
+    /** 渲染进程退出/WebView 被销毁前调用，之后必须忽略所有命令。 */
+    fun release() {}
 }
 
 enum class PlaybackCommand {
@@ -44,10 +47,28 @@ class PlaybackHub(
     val isPlaying: Boolean
         get() = _state.value.playing
 
+    /** 页面最近是否还有播放上报，用于区分「页面活着」和「渲染进程静默死亡」。 */
+    fun hasRecentReport(windowMs: Long): Boolean =
+        lastReportAt > 0 && SystemClock.elapsedRealtime() - lastReportAt <= windowMs
+
     /** 首次进入播放状态时触发，用于申请通知权限/电池优化提示。 */
     var onPlaybackStarted: (() -> Unit)? = null
 
+    /** 渲染进程不可用、需要宿主重建 WebView 时触发（由端口页注入）。 */
+    var onRebuildRequested: ((String) -> Unit)? = null
+
+    /** 渲染进程退出前记住的播放位置，用于页面重建后续播。 */
+    private data class PendingResume(
+        val positionMs: Long,
+        val durationMs: Long,
+        val title: String,
+        val savedAt: Long,
+    )
+
     private var controller: WebMediaController? = null
+    private var pendingResume: PendingResume? = null
+    private var resumeAttempts = 0
+    private var resumeLastAt = 0L
     private var serviceStarted = false
     private var lastServiceFailureAt = 0L
     private var polling = false
@@ -81,14 +102,29 @@ class PlaybackHub(
     fun attach(controller: WebMediaController) {
         main.post {
             this.controller = controller
+            resumeAttempts = 0
+            resumeLastAt = 0L
             controller.evaluate(MediaHookScript.inject())
             controller.evaluate(MediaHookScript.probe())
         }
     }
 
+    /**
+     * 只是标记这个控制器作废，不动播放状态。
+     * 渲染进程退出后重建 WebView 时用它，避免 detach 的 clearState 抹掉续播位置。
+     */
+    fun release(controller: WebMediaController?) {
+        main.post {
+            controller?.release()
+            if (this.controller === controller) this.controller = null
+        }
+    }
+
     fun detach(controller: WebMediaController? = null) {
         main.post {
-            if (controller != null && this.controller !== controller) return@post
+            // 渲染进程退出后 controller 已经是 null，此时退出端口页仍要清理通知
+            if (controller != null && this.controller != null && this.controller !== controller) return@post
+            controller?.release()
             this.controller = null
             clearState()
         }
@@ -130,13 +166,46 @@ class PlaybackHub(
         main.post {
             controller?.evaluate(MediaHookScript.inject())
             controller?.evaluate(MediaHookScript.probe())
+            if (pendingResume != null) {
+                resumeAttempts = 0
+                resumeLastAt = 0L
+                main.postDelayed({ deliverResume() }, RESUME_FIRST_DELAY_MS)
+                main.postDelayed({ deliverResume() }, RESUME_SECOND_DELAY_MS)
+            }
         }
     }
 
+    /**
+     * 渲染进程退出：保留通知与元数据，并记住播放位置。
+     * 页面重建完成后再按这个位置续播（见 deliverResume）。
+     */
     fun onRendererGone() {
         main.post {
             controller = null
-            clearState()
+            val current = _state.value
+            if (!current.hasMedia) {
+                clearState()
+                return@post
+            }
+            if (!current.playing) {
+                _state.value = current.copy(phase = PlaybackPhase.PAUSED)
+                detail("media: renderer gone while paused")
+                return@post
+            }
+            pendingResume = PendingResume(
+                positionMs = current.positionMs,
+                durationMs = current.durationMs,
+                title = current.title,
+                savedAt = SystemClock.elapsedRealtime(),
+            )
+            resumeAttempts = 0
+            resumeLastAt = 0L
+            _state.value = current.copy(phase = PlaybackPhase.PAUSED)
+            stopPolling()
+            resetWatchdog()
+            cancelTerminalStop()
+            scheduleStop(RENDERER_GONE_HOLD_MS, "renderer gone")
+            log("media: renderer gone, remember " + (current.positionMs / 1000) + "s")
         }
     }
 
@@ -174,6 +243,8 @@ class PlaybackHub(
                 PlaybackPhase.PLAYING, PlaybackPhase.BUFFERING -> {
                     cancelTerminalStop()
                     cancelEndedStop()
+                    // 播放起来了就不再需要续播，用户手动播放同样会走到这里
+                    pendingResume = null
                     _state.value = snapshot
                     ensureService()
                     startPolling()
@@ -197,6 +268,7 @@ class PlaybackHub(
                     stopPolling()
                     resetWatchdog()
                     if (previous.playing) log("media: paused")
+                    maybeRetryResume(now)
                 }
 
                 PlaybackPhase.ENDED -> {
@@ -256,7 +328,14 @@ class PlaybackHub(
 
     fun command(command: PlaybackCommand, positionMs: Long? = null) {
         main.post {
-            val current = controller ?: return@post
+            val current = controller
+            if (current == null) {
+                // 渲染进程已退出时，通知/媒体键的播放请求交给宿主重建页面
+                if (command == PlaybackCommand.PLAY || command == PlaybackCommand.TOGGLE) {
+                    onRebuildRequested?.invoke("user-play")
+                }
+                return@post
+            }
             val json = when (command) {
                 PlaybackCommand.PLAY -> """{"cmd":"play"}"""
                 PlaybackCommand.PAUSE -> """{"cmd":"pause"}"""
@@ -303,6 +382,8 @@ class PlaybackHub(
             PlaybackCommand.PAUSE -> {
                 cancelTerminalStop()
                 cancelEndedStop()
+                // 用户主动暂停后不要再自动续播
+                pendingResume = null
                 _state.value = current.copy(phase = PlaybackPhase.PAUSED)
                 stopPolling()
                 resetWatchdog()
@@ -406,8 +487,39 @@ class PlaybackHub(
         lastRecoverAt = 0L
     }
 
+    /** 把记住的位置下发给（重建后的）页面，由注入脚本在音频元素出现后 seek + play。 */
+    private fun deliverResume() {
+        val pending = pendingResume ?: return
+        val controller = controller ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - pending.savedAt > RESUME_TTL_MS) {
+            pendingResume = null
+            detail("media: resume expired")
+            return
+        }
+        if (resumeAttempts >= RESUME_MAX_ATTEMPTS) {
+            pendingResume = null
+            detail("media: resume give up")
+            return
+        }
+        resumeAttempts++
+        resumeLastAt = now
+        controller.evaluate(MediaHookScript.resume(pending.positionMs, pending.title))
+        log("media: resume " + (pending.positionMs / 1000) + "s try=" + resumeAttempts)
+    }
+
+    /** 页面重载后可能先上报 paused，等元素就绪期间按间隔补发几次。 */
+    private fun maybeRetryResume(now: Long) {
+        if (pendingResume == null) return
+        if (resumeAttempts >= RESUME_MAX_ATTEMPTS) return
+        if (resumeLastAt > 0 && now - resumeLastAt < RESUME_RETRY_MS) return
+        deliverResume()
+    }
+
     private fun scheduleStop(delayMs: Long, reason: String) {
         if (pendingStop != null) return
+        // 等待页面重建续播期间，页面导航/无媒体的 30s 宽限不能抢先清状态
+        if (pendingResume != null && reason != "renderer gone") return
         val task = Runnable {
             pendingStop = null
             detail("media: stop after grace ($reason)")
@@ -452,6 +564,9 @@ class PlaybackHub(
         cancelEndedStop()
         stopPolling()
         resetWatchdog()
+        pendingResume = null
+        resumeAttempts = 0
+        resumeLastAt = 0L
         _state.value = PlaybackSnapshot()
         stopService()
     }
@@ -523,5 +638,11 @@ class PlaybackHub(
         const val REPORT_SILENCE_MS = 45_000L
         const val PROBE_QUIET_MS = 15_000L
         const val SERVICE_RETRY_MS = 30_000L
+        const val RENDERER_GONE_HOLD_MS = 30 * 60_000L
+        const val RESUME_FIRST_DELAY_MS = 1_500L
+        const val RESUME_SECOND_DELAY_MS = 6_000L
+        const val RESUME_RETRY_MS = 4_000L
+        const val RESUME_MAX_ATTEMPTS = 4
+        const val RESUME_TTL_MS = 30 * 60_000L
     }
 }

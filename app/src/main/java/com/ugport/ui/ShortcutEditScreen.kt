@@ -179,7 +179,7 @@ fun ShortcutEditScreen(
 
             SectionCard(
                 title = "打开方式",
-                footer = "开启后台播放后，小米/红米还需在系统设置中允许自启动，并把省电策略设为无限制。",
+                footer = "开启后台播放后，小米/红米还需在系统设置中允许自启动，把省电策略设为无限制，并在最近任务界面下拉应用卡片锁定后台。",
             ) {
                 SwitchRow(
                     title = "桌面版网页",
