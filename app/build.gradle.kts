@@ -22,8 +22,8 @@ android {
         applicationId = "com.ugport"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "0.4.6"
+        versionCode = 26
+        versionName = "0.4.7"
         // 应用与 AndroidX 仅保留中英文资源
         resourceConfigurations += listOf("zh", "en")
     }
