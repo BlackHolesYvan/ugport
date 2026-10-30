@@ -1,16 +1,12 @@
-package com.ugport.ui
+package com.ugport.ui.web
 
 import android.Manifest
-import android.app.Activity
-import android.app.DownloadManager
 import android.content.Context
-import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -20,7 +16,6 @@ import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
-import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -36,40 +31,24 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -86,25 +65,45 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
 import com.ugport.media.PlaybackHub
 import com.ugport.media.WebMediaController
 import com.ugport.network.HttpFactory
+import com.ugport.ui.MainViewModel
+import com.ugport.ui.WebTarget
 import com.ugport.ui.components.ConfirmDialog
 import com.ugport.ui.components.GlassActionSheet
-import com.ugport.ui.components.GlassLevel
-import com.ugport.ui.components.GlassSurface
 import com.ugport.ui.components.SheetAction
-import com.ugport.ui.components.glass
 import com.ugport.ui.components.WebGpuHint
 import com.ugport.util.BatteryOptimization
 import com.ugport.util.UrlTools
+import com.ugport.web.AUTO_FILL_DELAY_MS
+import com.ugport.web.BLANK_CHECK_DELAY_MS
+import com.ugport.web.BLANK_CHECK_SCRIPT
+import com.ugport.web.BLANK_RECHECK_MS
+import com.ugport.web.CONTROLS_AUTO_HIDE_MS
+import com.ugport.web.CONSOLE_DEDUP_MS
+import com.ugport.web.GPU_PROBE_READ_DELAYS
+import com.ugport.web.HEIGHT_FOLLOW_UP_MS
+import com.ugport.web.HEIGHT_FOLLOW_UP_RETRY_MS
+import com.ugport.web.MAX_AUTO_FILLS
+import com.ugport.web.MAX_REBUILDS
+import com.ugport.web.MEDIA_PAUSE_SCRIPT
+import com.ugport.web.PAGE_INFO_SCRIPT
+import com.ugport.web.PROGRESS_FINISHED
+import com.ugport.web.PROGRESS_STARTED
+import com.ugport.web.REBUILD_WINDOW_MS
+import com.ugport.web.RENDERER_PROBE_MS
+import com.ugport.web.RENDERER_REPORT_WINDOW_MS
+import com.ugport.web.SHORT_PAGE_SCRIPT
+import com.ugport.web.SPA_SHORT_CHECK_MS
+import com.ugport.web.SPA_VH_FIX_MS
+import com.ugport.web.STALL_RELOAD_MS
+import com.ugport.web.STALL_SCRIPT
+import com.ugport.web.VH_FIX_SCRIPT
 import com.ugport.web.LoginScripts
 import com.ugport.web.MediaHookScript
 import com.ugport.web.GpuAdapterState
@@ -153,7 +152,8 @@ fun WebScreen(
     var autoFillCount by remember { mutableIntStateOf(0) }
     // 同一 URL 只做一次「清缓存重载」，避免空白页无限循环
     var blankRetriedUrl by remember { mutableStateOf<String?>(null) }
-    // 页面骨架加载完成但一直没有文字时，自动重载一次（并发 chunk 请求可能被代理挂起）
+    // 页面骨架加载完成但一直没有文字时，自动重载一次。
+    // 并发 chunk 请求可能被代理挂起，导致脚本永远不执行。
     var stallRetriedUrl by remember { mutableStateOf<String?>(null) }
     // 外部链接：待用户选择的目标，以及选择「应用内」后放行一次的 URL
     var pendingLink by remember { mutableStateOf<Uri?>(null) }
@@ -261,8 +261,9 @@ fun WebScreen(
                 view.evaluateJavascript(BLANK_CHECK_SCRIPT) { result ->
                     val blank = result?.trim('"') == "blank"
                     if (blank) {
-                        viewModel.diagnostics.log(
-                            "web: blank check=true " + viewModel.diagnostics.redactUrl(url)
+                        viewModel.diagnostics.log("web: blank check=true")
+                        viewModel.diagnostics.detail(
+                            "web: blank url=" + viewModel.diagnostics.redactUrl(url)
                         )
                         // 给前端留出初始化时间，二次确认后再动缓存
                         view.postDelayed({
@@ -304,7 +305,7 @@ fun WebScreen(
                     }
                 }
             }
-        }, 6000L)
+        }, STALL_RELOAD_MS)
     }
 
     /**
@@ -323,7 +324,7 @@ fun WebScreen(
                     scheduleHeightFollowUp(view, url, attempt + 1)
                 }
             }
-        }, if (attempt == 0) 1200L else 2000L)
+        }, if (attempt == 0) HEIGHT_FOLLOW_UP_MS else HEIGHT_FOLLOW_UP_RETRY_MS)
     }
 
     fun applyGpuProbe(result: WebGpuProbeResult) {
@@ -443,7 +444,7 @@ fun WebScreen(
         rendererDead = false
         recovering = true
         errorText = null
-        progress = 10
+        progress = PROGRESS_STARTED
         webGeneration++
         viewModel.diagnostics.log("web: rebuild ($reason)")
     }
@@ -495,7 +496,8 @@ fun WebScreen(
                         WebView(ctx).apply {
                             WebViewConfigurator.configure(this, desktopUa, mediaEnabled)
                             if (mediaEnabled) {
-                                // 允许后台播放的端口常驻高优先级：切章瞬间 hasMedia 会短暂为 false，
+                                // 允许后台播放的端口常驻高优先级。
+                                // 切章瞬间 hasMedia 会短暂为 false，不能据此降级。
                                 // 一旦掉回 BOUND，渲染进程在后台更容易被系统回收
                                 runCatching {
                                     setRendererPriorityPolicy(
@@ -552,17 +554,20 @@ fun WebScreen(
                                     gpuPageToken++
                                     gpuProbe = null
                                     if (mediaEnabled) playback.onPageStarted()
-                                    progress = 10
+                                    progress = PROGRESS_STARTED
                                     if (url != null) {
                                         if (url == pendingInternal) pendingInternal = null
-                                        viewModel.diagnostics.log("web: start ${viewModel.diagnostics.redactUrl(url)}")
+                                        viewModel.diagnostics.log("web: start")
+                                        viewModel.diagnostics.detail(
+                                            "web: start url=" + viewModel.diagnostics.redactUrl(url)
+                                        )
                                     }
                                 }
 
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     super.onPageFinished(view, url)
                                     if (view == null || url == null || view !== webView) return
-                                    progress = 100
+                                    progress = PROGRESS_FINISHED
                                     if (view.url == url) {
                                         rendererDead = false
                                         recovering = false
@@ -575,7 +580,9 @@ fun WebScreen(
                                             playback.onPageLoaded()
                                             view.post {
                                                 if (view !== webView) return@post
-                                                view.evaluateJavascript("window.__ugMediaVersion === 5") { result ->
+                                                view.evaluateJavascript(
+                                                    "window.__ugMediaVersion === ${MediaHookScript.VERSION}",
+                                                ) { result ->
                                                     viewModel.diagnostics.detail(
                                                         "web: media hook=" + (result?.trim('"') ?: "?")
                                                     )
@@ -595,14 +602,16 @@ fun WebScreen(
 
                                     if (UrlTools.isUgreenLoginUrl(url, relayHost)) {
                                         // 先尝试原生重新授权；失败或需要 OTP 时再由页面处理
-                                        viewModel.diagnostics.log(
-                                            "web: ugos login page detected ${viewModel.diagnostics.redactUrl(url)}"
+                                        viewModel.diagnostics.log("web: ugos login page detected")
+                                        viewModel.diagnostics.detail(
+                                            "web: login url=" + viewModel.diagnostics.redactUrl(url)
                                         )
                                         viewModel.onLoginPageDetected(currentTarget.value)
-                                        if (lastAutoFill != url && autoFillCount < 3) {
+                                        if (lastAutoFill != url && autoFillCount < MAX_AUTO_FILLS) {
                                             lastAutoFill = url
                                             autoFillCount++
-                                            // 原生重授权通常 1-2 秒完成；4 秒后仍停在登录页再自动填充
+                                            // 原生重授权通常 1-2 秒完成；
+                                            // 等待 AUTO_FILL_DELAY_MS 后仍停在登录页再自动填充
                                             view.postDelayed({
                                                 if (view !== webView) return@postDelayed
                                                 if (!viewModel.busy && viewModel.otpPrompt == null &&
@@ -610,7 +619,7 @@ fun WebScreen(
                                                 ) {
                                                     fillCredentials()
                                                 }
-                                            }, 4000L)
+                                            }, AUTO_FILL_DELAY_MS)
                                             view.postDelayed({
                                                 if (view !== webView) return@postDelayed
                                                 if (!viewModel.busy && viewModel.otpPrompt == null &&
@@ -640,8 +649,9 @@ fun WebScreen(
                                     if (!WebViewConfigurator.isTrustedHost(Uri.parse(url).host, baseUrl)) return
                                     val relayHost = nas?.let { UrlTools.loginHost(it) }
                                     if (UrlTools.isUgreenLoginUrl(url, relayHost)) {
-                                        viewModel.diagnostics.log(
-                                            "web: ugos login page detected ${viewModel.diagnostics.redactUrl(url)}"
+                                        viewModel.diagnostics.log("web: ugos login page detected")
+                                        viewModel.diagnostics.detail(
+                                            "web: login url=" + viewModel.diagnostics.redactUrl(url)
                                         )
                                         viewModel.onLoginPageDetected(current)
                                     } else {
@@ -659,7 +669,7 @@ fun WebScreen(
                                             val n = result?.trim('"')?.toIntOrNull() ?: 0
                                             if (n > 0) viewModel.diagnostics.detail("web: spa vhFix=$n (late)")
                                         }
-                                    }, 600L)
+                                    }, SPA_VH_FIX_MS)
                                     view.postDelayed({
                                         if (view !== webView) return@postDelayed
                                         view.evaluateJavascript(SHORT_PAGE_SCRIPT) { result ->
@@ -672,7 +682,7 @@ fun WebScreen(
                                                 }
                                             }
                                         }
-                                    }, 800L)
+                                    }, SPA_SHORT_CHECK_MS)
                                 }
 
                                 override fun shouldOverrideUrlLoading(
@@ -720,7 +730,8 @@ fun WebScreen(
 
                                 /**
                                  * 动态 chunk（*.async.js）在部分设备上会被 WebView 的连接层挂起，
-                                 * 既不报错也不返回。这里改用 OkHttp 拉取并回填，失败则回退给 WebView。
+                                 * 既不报错也不返回。这里改用 OkHttp 拉取并回填，
+                                 * 失败则回退给 WebView。
                                  */
                                 override fun shouldInterceptRequest(
                                     view: WebView?,
@@ -796,14 +807,20 @@ fun WebScreen(
                                 ) {
                                     if (request?.isForMainFrame == true) {
                                         errorText = "页面加载失败：${error?.description ?: "未知错误"}"
-                                        viewModel.diagnostics.log(
-                                            "web: error ${error?.description ?: "?"} ${viewModel.diagnostics.redactUrl(request.url?.toString().orEmpty())}"
+                                        viewModel.diagnostics.log("web: error ${error?.description ?: "?"}")
+                                        viewModel.diagnostics.detail(
+                                            "web: error url=" +
+                                                viewModel.diagnostics.redactUrl(
+                                                    request.url?.toString().orEmpty()
+                                                )
                                         )
                                     } else {
                                         // 子资源加载失败是“框架出来了但页面空白”的常见原因
-                                        viewModel.diagnostics.log(
+                                        viewModel.diagnostics.detail(
                                             "web: resource error ${error?.description ?: "?"} " +
-                                                viewModel.diagnostics.redactUrl(request?.url?.toString().orEmpty())
+                                                viewModel.diagnostics.redactUrl(
+                                                    request?.url?.toString().orEmpty()
+                                                )
                                         )
                                     }
                                 }
@@ -816,12 +833,19 @@ fun WebScreen(
                                     val status = errorResponse?.statusCode ?: 0
                                     if (request?.isForMainFrame == true) {
                                         errorText = "页面加载失败：HTTP $status"
-                                        viewModel.diagnostics.log(
-                                            "web: http $status ${viewModel.diagnostics.redactUrl(request.url?.toString().orEmpty())}"
+                                        viewModel.diagnostics.log("web: http $status")
+                                        viewModel.diagnostics.detail(
+                                            "web: http $status url=" +
+                                                viewModel.diagnostics.redactUrl(
+                                                    request.url?.toString().orEmpty()
+                                                )
                                         )
                                     } else if (status >= 400) {
-                                        viewModel.diagnostics.log(
-                                            "web: resource $status ${viewModel.diagnostics.redactUrl(request?.url?.toString().orEmpty())}"
+                                        viewModel.diagnostics.detail(
+                                            "web: resource $status " +
+                                                viewModel.diagnostics.redactUrl(
+                                                    request?.url?.toString().orEmpty()
+                                                )
                                         )
                                     }
                                 }
@@ -914,7 +938,7 @@ fun WebScreen(
                                             val key = "$level|$body"
                                             val now = System.currentTimeMillis()
                                             // 第三方页面常连续输出同一条，5 秒内只记一次
-                                            if (key != lastConsoleKey || now - lastConsoleAt >= 5_000) {
+                                            if (key != lastConsoleKey || now - lastConsoleAt >= CONSOLE_DEDUP_MS) {
                                                 lastConsoleKey = key
                                                 lastConsoleAt = now
                                                 if (level == ConsoleMessage.MessageLevel.ERROR) {
@@ -950,7 +974,8 @@ fun WebScreen(
                                 )
                             }
                             // 不要在 factory 里预加载 target.url：
-                            // 那是 dockerToken 的一次性鉴权页，WebView 抢先加载会消费掉 token 并跳到 /，
+                            // 那是 dockerToken 的一次性鉴权页，
+                            // WebView 抢先加载会消费掉 token 并跳到 /，
                             // 导致设置了页面路径的端口首次打开落到根路径（可能 404）。
                             webView = this
                         }
@@ -1003,61 +1028,13 @@ fun WebScreen(
 
                 val currentError = errorText
                 if (currentError != null) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        GlassSurface(
-                            modifier = Modifier.widthIn(max = 340.dp),
-                            level = GlassLevel.Strong,
-                            padding = PaddingValues(24.dp),
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.errorContainer,
-                                            CircleShape,
-                                        ),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.Warning,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(26.dp),
-                                    )
-                                }
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    text = "页面加载失败",
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = currentError,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 5,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Spacer(Modifier.height(16.dp))
-                                Button(
-                                    onClick = {
-                                        errorText = null
-                                        rebuildWebView("retry")
-                                    },
-                                ) { Text("重试") }
-                            }
-                        }
-                    }
+                    WebErrorCard(
+                        message = currentError,
+                        onRetry = {
+                            errorText = null
+                            rebuildWebView("retry")
+                        },
+                    )
                 }
 
         androidx.compose.animation.AnimatedVisibility(
@@ -1203,7 +1180,8 @@ fun WebScreen(
             playback.detach()
         }
         blankRetriedUrl = null
-        // 等待 AndroidView 创建 WebView；只用 target.url 作为 key，避免 WebView 状态变化导致重复准备鉴权
+        // 等待 AndroidView 创建 WebView。
+        // 只用 target.url 作为 key，避免 WebView 状态变化导致重复准备鉴权
         val view = snapshotFlow { webView }.filterNotNull().first()
         WebViewConfigurator.applyUaMode(view, desktopUa)
         val loadUrl = viewModel.prepareDockerRedirect(target)
@@ -1212,7 +1190,7 @@ fun WebScreen(
         pendingRestoreUrl = null
         seedCookies(cookieJar, target.url)
         errorText = null
-        progress = 10
+        progress = PROGRESS_STARTED
         val webViewPackage = WebViewCompat.getCurrentWebViewPackage(view.context)
         viewModel.diagnostics.detail(
             "web: webview=${webViewPackage?.packageName} ${webViewPackage?.versionName}"
@@ -1309,385 +1287,3 @@ fun WebScreen(
 }
 
 /** 关闭「允许后台播放」的端口在离开前台时调用，不依赖已注入的媒体脚本。 */
-private const val CONTROLS_AUTO_HIDE_MS = 5_000L
-
-/** 回前台时 JS 回声探测的等待时间。 */
-private const val RENDERER_PROBE_MS = 4_000L
-
-/** 距上次页面播放上报在这个时间内，视为页面仍然活着，不再探测。 */
-private const val RENDERER_REPORT_WINDOW_MS = 15_000L
-
-/** 渲染进程反复退出时，10 分钟内最多自动重建 3 次。 */
-private const val REBUILD_WINDOW_MS = 10 * 60_000L
-private const val MAX_REBUILDS = 3
-
-private val GPU_PROBE_READ_DELAYS = longArrayOf(250L, 600L, 1200L, 1800L)
-
-private const val MEDIA_PAUSE_SCRIPT =
-    "(function(){try{var m=document.querySelectorAll('audio,video');" +
-        "for(var i=0;i<m.length;i++){try{m[i].pause();}catch(e){}}}catch(e){}})();"
-
-private val VH_FIX_SCRIPT = """
-    (function(){
-      try {
-        var h = window.innerHeight;
-        if (!document.body || !h) return 0;
-        // 只有 vh 真的算成 0 时才处理
-        var probe = document.createElement('div');
-        probe.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;';
-        document.documentElement.appendChild(probe);
-        probe.style.height = '100vh';
-        var unit = probe.getBoundingClientRect().height;
-        document.documentElement.removeChild(probe);
-        if (unit > 0) return 0;
-        function convert(v){
-          return v.replace(/([0-9.]+)(dvh|svh|lvh|vh)/g, function(m, n){
-            return (parseFloat(n) * h / 100) + 'px';
-          });
-        }
-        var count = 0;
-        function walk(rules){
-          for (var i = 0; i < rules.length; i++) {
-            var r = rules[i];
-            if (r.style) {
-              var props = ['height', 'minHeight', 'maxHeight'];
-              for (var p = 0; p < props.length; p++) {
-                var v = r.style[props[p]];
-                if (v && /(dvh|svh|lvh|vh)/.test(v)) {
-                  try { r.style[props[p]] = convert(v); count++; } catch (e) {}
-                }
-              }
-            }
-            if (r.cssRules && r.cssRules.length) walk(r.cssRules);
-          }
-        }
-        for (var i = 0; i < document.styleSheets.length; i++) {
-          try { var rules = document.styleSheets[i].cssRules; if (rules) walk(rules); } catch (e) {}
-        }
-        var inline = document.querySelectorAll('[style*="vh"]');
-        for (var j = 0; j < inline.length; j++) {
-          var props2 = ['height', 'minHeight', 'maxHeight'];
-          for (var k = 0; k < props2.length; k++) {
-            var iv = inline[j].style[props2[k]];
-            if (iv && /(dvh|svh|lvh|vh)/.test(iv)) {
-              try { inline[j].style[props2[k]] = convert(iv); count++; } catch (e) {}
-            }
-          }
-        }
-        if (count > 0) { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }
-        return count;
-      } catch (e) { return 0; }
-    })();
-""".trimIndent()
-
-private val STALL_SCRIPT = """
-    (function(){
-      try {
-        var b = document.body;
-        if (!b) return 'ok';
-        return (b.innerText || '').trim().length === 0 ? 'stall' : 'ok';
-      } catch (e) { return 'ok'; }
-    })();
-""".trimIndent()
-
-private val SHORT_PAGE_SCRIPT = """
-    (function(){
-      try {
-        var vh = window.innerHeight, b = document.body;
-        if (!b || vh <= 0) return 'skip';
-        return b.getBoundingClientRect().height < vh * 0.5 ? 'short' : 'ok';
-      } catch (e) { return 'ok'; }
-    })();
-""".trimIndent()
-
-private const val BLANK_CHECK_DELAY_MS = 900L
-private const val BLANK_RECHECK_MS = 900L
-
-/**
- * 空白页判定：body 高度为 0，或既没有文字也没有可见的图片/画布/控件。
- * 只用于“清缓存重载一次”的兜底，不做像素截图判断。
- */
-private val BLANK_CHECK_SCRIPT = """
-    (function(){
-      try {
-        var b = document.body;
-        if (!b) return 'blank';
-        // 有文字就说明页面并非空白（body 高度 0 属于布局问题，由 PAGE_INFO_SCRIPT 修复）
-        if ((b.innerText || '').trim().length > 0) return 'ok';
-        var nodes = document.querySelectorAll('img,canvas,video,svg,iframe,input,button,select,textarea');
-        for (var i = 0; i < nodes.length; i++) {
-          var style = getComputedStyle(nodes[i]);
-          var rect = nodes[i].getBoundingClientRect();
-          if (style.display !== 'none' && style.visibility !== 'hidden' &&
-              rect.width > 2 && rect.height > 2) return 'ok';
-        }
-        return 'blank';
-      } catch (e) { return 'ok'; }
-    })();
-""".trimIndent()
-
-private val PAGE_INFO_SCRIPT = """
-    (function(){
-      try {
-        var vw = window.innerWidth, vh = window.innerHeight;
-        var repaired = [];
-        function rectOf(el){
-          if (!el) return null;
-          var b = el.getBoundingClientRect();
-          return [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)];
-        }
-        // 部分 WebUI（qBittorrent、PanSou）在 WebView 里 body 高度会算成 0：
-        // 可能是 body 塌陷，也可能是 100dvh 解析为 0 后被 overflow:hidden 裁剪。
-        function repairBodyHeight(){
-          if (!document.body || vh <= 0) return 'skip';
-          var bh = document.body.getBoundingClientRect().height;
-          // 高度达到视口一半以上视为正常；否则可能是视口单位失效，
-          // 或 WebUI 在 WebView 完成布局前按旧的 innerHeight 算好了尺寸（如 qBittorrent）。
-          if (bh >= vh * 0.5) return 'ok';
-          // 该 WebView 里 dvh/vh 视口单位可能全部算成 0，百分比高度也随之失效，
-          // 所以直接用 window.innerHeight 换算成像素写内联样式。
-          if (document.documentElement) {
-            document.documentElement.style.setProperty('height', vh + 'px', 'important');
-          }
-          document.body.style.setProperty('height', vh + 'px', 'important');
-          document.body.style.setProperty('min-height', vh + 'px', 'important');
-          document.body.style.setProperty('overflow', 'visible', 'important');
-          // 仅当 body 完全塌陷时（如 PanSou 的 #app/#app-shell 都为 0），
-          // 才需要兜底撑开布局容器；body 只是偏矮时（qBittorrent），
-          // 撑 body 即可由 CSS 百分比自然传导，直接改子元素会把页头也拉满、
-          // 把 pageWrapper 挤到屏幕外。
-          if (bh === 0) {
-            var nodes = document.querySelectorAll('body > *, body > * > *');
-            for (var i = 0; i < nodes.length; i++) {
-              var el = nodes[i], b = el.getBoundingClientRect();
-              if (b.width >= vw * 0.9 && b.height === 0) {
-                el.style.setProperty('height', vh + 'px', 'important');
-                el.style.setProperty('min-height', vh + 'px', 'important');
-                repaired.push((el.id || el.className || el.tagName).toString().slice(0, 40));
-              }
-            }
-          }
-          // 页面自己的 resize 处理可能抛错（qBittorrent/MooTools），不能影响诊断返回
-          try { window.dispatchEvent(new Event('resize')); } catch (e) {}
-          return document.body.getBoundingClientRect().height > 0 ? 'fixed' : 'fail';
-        }
-        // 该 WebView 里 vh/dvh 可能全部算成 0（实测 Android 16 / WebView 143）。
-        // 受影响页面会把 height:100vh 的布局容器压成 0，只剩文字不出界面。
-        function measureUnit(prop){
-          var probe = document.createElement('div');
-          probe.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;';
-          document.documentElement.appendChild(probe);
-          probe.style.height = prop;
-          var value = probe.getBoundingClientRect().height;
-          document.documentElement.removeChild(probe);
-          return value;
-        }
-        function fixVhUnits(height){
-          var count = 0;
-          function convert(value){
-            return value.replace(/([0-9.]+)(dvh|svh|lvh|vh)/g, function(m, num){
-              return (parseFloat(num) * height / 100) + 'px';
-            });
-          }
-          function walk(rules){
-            for (var i = 0; i < rules.length; i++) {
-              var r = rules[i];
-              if (r.style) {
-                var props = ['height', 'minHeight', 'maxHeight'];
-                for (var p = 0; p < props.length; p++) {
-                  var v = r.style[props[p]];
-                  if (v && /(dvh|svh|lvh|vh)/.test(v)) {
-                    try { r.style[props[p]] = convert(v); count++; } catch (e) {}
-                  }
-                }
-              }
-              // Chrome 支持 CSS 嵌套，CSSStyleRule 也有 cssRules，不能据此跳过 style
-              if (r.cssRules && r.cssRules.length) walk(r.cssRules);
-            }
-          }
-          for (var i = 0; i < document.styleSheets.length; i++) {
-            try { var rules = document.styleSheets[i].cssRules; if (rules) walk(rules); } catch (e) {}
-          }
-          // 内联 style 里的 vh 也一并换算
-          var inline = document.querySelectorAll('[style*="vh"]');
-          for (var j = 0; j < inline.length; j++) {
-            var props2 = ['height', 'minHeight', 'maxHeight'];
-            for (var k = 0; k < props2.length; k++) {
-              var iv = inline[j].style[props2[k]];
-              if (iv && /(dvh|svh|lvh|vh)/.test(iv)) {
-                try { inline[j].style[props2[k]] = convert(iv); count++; } catch (e) {}
-              }
-            }
-          }
-          return count;
-        }
-        var vhUnit = measureUnit('100vh');
-        var vhFix = 0;
-        if (vhUnit === 0) vhFix = fixVhUnits(vh);
-        var bodyBroken = !!(document.body && vh > 0 && document.body.getBoundingClientRect().height < vh * 0.5);
-        var bodyFix = repairBodyHeight();
-        var e = document.elementFromPoint(vw / 2, vh / 2);
-        return JSON.stringify({
-          title: document.title || '',
-          body: document.body ? document.body.innerText.length : 0,
-          ready: document.readyState,
-          scripts: document.scripts.length,
-          width: vw,
-          height: vh,
-          bodyFix: bodyFix,
-          repaired: repaired,
-          vhFix: vhFix,
-          vh: vhUnit,
-          bodyRect: rectOf(document.body),
-          desktop: (function(){ var d=document.getElementById('desktop'); if(!d) return null; var s=getComputedStyle(d),b=d.getBoundingClientRect(); return [s.display,s.visibility,s.opacity,b.x,b.y,b.width,b.height]; })(),
-          atCenter: e ? (e.id || (typeof e.className === 'string' ? e.className : '') || e.tagName) : '',
-          errors: (window.__ugErrors || []).slice(0, 5)
-        });
-      } catch (err) {
-        return 'err:' + err;
-      }
-    })();
-""".trimIndent()
-
-private fun seedCookies(cookieJar: HttpFactory.MemoryCookieJar, url: String) {
-    val manager = CookieManager.getInstance()
-    cookieJar.all().forEach { cookie ->
-        val host = cookie.domain.removePrefix(".")
-        val value = "${cookie.name}=${cookie.value}; path=${cookie.path}; domain=${cookie.domain}"
-        runCatching { manager.setCookie("https://$host", value) }
-    }
-    manager.flush()
-}
-
-private fun enqueueDownload(
-    context: Context,
-    url: String,
-    contentDisposition: String?,
-    mimeType: String?,
-    userAgent: String,
-) {
-    runCatching {
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            setMimeType(mimeType)
-            addRequestHeader("User-Agent", userAgent)
-            CookieManager.getInstance().getCookie(url)?.let { addRequestHeader("Cookie", it) }
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(
-                Environment.DIRECTORY_DOWNLOADS,
-                URLUtil.guessFileName(url, contentDisposition, mimeType),
-            )
-        }
-        (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-    }
-}
-
-
-@Composable
-private fun CollapsedControlsBar(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(width = 44.dp, height = 48.dp)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.CenterEnd,
-    ) {
-        val shape = RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
-        val scrim = MaterialTheme.colorScheme.surface.copy(alpha = 0.60f)
-        Box(
-            modifier = Modifier
-                .width(8.dp)
-                .height(36.dp)
-                .background(scrim, shape)
-                .glass(shape, GlassLevel.Strong),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(2.dp)
-                    .height(14.dp)
-                    .background(
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                        CircleShape,
-                    ),
-            )
-        }
-    }
-}
-
-@Composable
-private fun WebFab(
-    icon: ImageVector,
-    contentDescription: String,
-    onClick: () -> Unit,
-) {
-    val scrim = MaterialTheme.colorScheme.surface.copy(alpha = 0.60f)
-    GlassSurface(
-        modifier = Modifier
-            .size(48.dp)
-            .background(scrim, CircleShape),
-        shape = CircleShape,
-        level = GlassLevel.Strong,
-        onClick = onClick,
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun WebProgress(progress: Int, modifier: Modifier = Modifier) {
-    val animated by animateFloatAsState(
-        targetValue = if (progress > 0) progress.coerceIn(0, 100) / 100f else 0f,
-        animationSpec = tween(240, easing = LinearEasing),
-        label = "webProgress",
-    )
-    val visible = progress in 1..99
-    val alpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(220),
-        label = "webProgressAlpha",
-    )
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(2.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = alpha)),
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(animated)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = alpha)),
-        )
-    }
-}
-
-private fun openExternal(context: Context, uri: Uri) {
-    runCatching {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-}
-
-/** LocalActivity 为空时（测试或特殊宿主）沿 ContextWrapper 链找 Activity。 */
-private fun Context.findActivity(): Activity? {
-    var current: Context = this
-    while (current is ContextWrapper) {
-        if (current is Activity) return current
-        current = current.baseContext
-    }
-    return null
-}

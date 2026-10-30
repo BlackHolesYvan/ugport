@@ -22,6 +22,17 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.UUID
 
+/**
+ * 绿联云 HTTP API。
+ *
+ * 所有请求都带 Web 端一致的 [desktopHeaders]：服务端会校验 Client-Id / Client-Version / UG-Agent，
+ * 缺任意一个都可能返回 4xx 或空 data。
+ *
+ * token 约定：服务端接受 query 形式的明文 token；放在 `X-Ugreen-Token` 头里会被判定非法
+ * （该头需要 RSA 加密值）。
+ *
+ * 线程：所有 suspend 方法内部切到 [Dispatchers.IO]，调用方可以直接在主线程调用。
+ */
 class UgreenApi(
     private val client: OkHttpClient,
     baseUrl: String,
@@ -44,19 +55,28 @@ class UgreenApi(
 
     data class DockerRedirect(val url: String?, val code: Int, val message: String)
 
+    /**
+     * 获取登录公钥。
+     *
+     * 服务端把 X-Rsa-Token 放进响应头（Base64）。
+     * 返回 null 表示没拿到公钥，调用方不应继续登录。
+     */
     suspend fun check(username: String): String? = withContext(Dispatchers.IO) {
         val body = buildJsonObject { put("username", username) }
             .toString()
             .toRequestBody(JSON)
         val request = Request.Builder()
-            .url("$baseUrl/ugreen/v1/verify/check")
+            .url("$baseUrl${UgreenEndpoints.VERIFY_CHECK}")
             .post(body)
             .desktopHeaders(baseUrl)
             .build()
         runCatching {
             client.newCall(request).execute().use { response ->
                 val header = response.header("X-Rsa-Token")
-                diagnostics.log("check http=${response.code} rsaToken=${if (header.isNullOrBlank()) "none" else "present"}")
+                diagnostics.log(
+                    "check http=${response.code} " +
+                        "rsaToken=${if (header.isNullOrBlank()) "none" else "present"}"
+                )
                 if (header.isNullOrBlank()) return@use null
                 val decoded = runCatching {
                     String(Base64.decode(header, Base64.DEFAULT), Charsets.UTF_8)
@@ -69,6 +89,11 @@ class UgreenApi(
         }
     }
 
+    /**
+     * 用户名 + 密码登录。
+     *
+     * [LoginResult.token] 为空且 [LoginResult.enableOtp] 为 true 时，调用方应转入验证码流程。
+     */
     suspend fun login(username: String, password: String): LoginResult = withContext(Dispatchers.IO) {
         val publicKey = check(username)
             ?: return@withContext LoginResult(null, null, false, null, null, -1, "获取 RSA 公钥失败")
@@ -87,7 +112,7 @@ class UgreenApi(
         }.toString().toRequestBody(JSON)
 
         val request = Request.Builder()
-            .url("$baseUrl/ugreen/v1/verify/login")
+            .url("$baseUrl${UgreenEndpoints.VERIFY_LOGIN}")
             .post(body)
             .desktopHeaders(baseUrl)
             .build()
@@ -109,7 +134,8 @@ class UgreenApi(
                 val authType = data?.get("auth_type")?.stringValue()
                 val publicKey = data?.get("public_key")?.stringValue()
                 diagnostics.log(
-                    "login http=${response.code} code=${env.code} msg=${env.msg} otp=$enableOtp token=${diagnostics.maskToken(token)}"
+                    "login http=${response.code} code=${env.code} msg=${env.msg} " +
+                        "otp=$enableOtp token=${diagnostics.maskToken(token)}"
                 )
                 LoginResult(token, authType, enableOtp, tokenId, otpType, env.code, env.msg)
             }
@@ -119,6 +145,10 @@ class UgreenApi(
         }
     }
 
+    /**
+     * OTP 验证码登录。
+     * [trust] 为 true 时服务端会记住当前设备，后续登录通常不再需要验证码。
+     */
     suspend fun codeLogin(code: String, type: Int?, tokenId: String?): LoginResult =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
@@ -134,7 +164,7 @@ class UgreenApi(
                 put("trust", true)
             }.toString().toRequestBody(JSON)
             val request = Request.Builder()
-                .url("$baseUrl/ugreen/v1/verify/code/login")
+                .url("$baseUrl${UgreenEndpoints.VERIFY_CODE_LOGIN}")
                 .post(body)
                 .desktopHeaders(baseUrl)
                 .build()
@@ -144,7 +174,10 @@ class UgreenApi(
                     val env = parseEnvelope(text)
                     val data = env.data as? JsonObject
                     val token = data?.get("token")?.stringValue()
-                    diagnostics.log("codeLogin http=${response.code} code=${env.code} msg=${env.msg} token=${diagnostics.maskToken(token)}")
+                    diagnostics.log(
+                        "codeLogin http=${response.code} code=${env.code} msg=${env.msg} " +
+                            "token=${diagnostics.maskToken(token)}"
+                    )
                     LoginResult(
                         token,
                         data?.get("auth_type")?.stringValue(),
@@ -160,8 +193,9 @@ class UgreenApi(
             }
         }
 
+    /** 校验 token 是否仍有效。正常打开端口不走这里，仅供诊断与手动重试使用。 */
     suspend fun isLogin(token: String, authType: String?): Boolean = withContext(Dispatchers.IO) {
-        val url = urlBuilder("/ugreen/v1/verify/is_login", token, authType).build()
+        val url = urlBuilder(UgreenEndpoints.VERIFY_IS_LOGIN, token, authType).build()
         val request = Request.Builder()
             .url(url)
             .get()
@@ -180,9 +214,10 @@ class UgreenApi(
         }
     }
 
+    /** 刷新 token。失败返回 null，调用方应继续使用旧 token 而不是清空登录态。 */
     suspend fun refresh(token: String, authType: String?): String? = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url(urlBuilder("/ugreen/v1/verify/refresh", token, authType).build())
+            .url(urlBuilder(UgreenEndpoints.VERIFY_REFRESH, token, authType).build())
             .put(ByteArray(0).toRequestBody(null))
             .desktopHeaders(baseUrl)
             .build()
@@ -200,8 +235,9 @@ class UgreenApi(
         }.getOrElse { null }
     }
 
+    /** 获取网关端口需要的 uid；返回结构在不同固件上可能是 `data.result` 或 `data.uid`。 */
     suspend fun getUid(token: String, authType: String?): UidResult = withContext(Dispatchers.IO) {
-        val url = urlBuilder("/ugreen/v1/docker/app/GetUid", token, authType).build()
+        val url = urlBuilder(UgreenEndpoints.DOCKER_UID, token, authType).build()
         val request = Request.Builder()
             .url(url)
             .get()
@@ -212,7 +248,10 @@ class UgreenApi(
                 val text = response.body?.string().orEmpty()
                 val env = parseEnvelope(text)
                 val uid = extractUid(env.data)
-                diagnostics.log("GetUid http=${response.code} code=${env.code} msg=${env.msg} uid=${diagnostics.maskToken(uid)}")
+                diagnostics.log(
+                    "GetUid http=${response.code} code=${env.code} msg=${env.msg} " +
+                        "uid=${diagnostics.maskToken(uid)}"
+                )
                 UidResult(uid, env.code, env.msg)
             }
         }.getOrElse {
@@ -227,7 +266,7 @@ class UgreenApi(
      * 打开 redirect_url 后页面会写入 ugreen-proxy-token Cookie 并跳转到 /。
      */
     suspend fun getDockerRedirect(port: Int, token: String): DockerRedirect = withContext(Dispatchers.IO) {
-        val builder = ("$baseUrl/ugreen/v1/gateway/proxy/dockerToken").toHttpUrlOrNull()?.newBuilder()
+        val builder = ("$baseUrl${UgreenEndpoints.DOCKER_TOKEN}").toHttpUrlOrNull()?.newBuilder()
         if (builder == null) return@withContext DockerRedirect(null, -1, "非法地址")
         builder.addQueryParameter("port", port.toString())
         builder.addQueryParameter("token", token)
@@ -256,7 +295,7 @@ class UgreenApi(
     suspend fun logout(token: String, authType: String?) {
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
-                .url(urlBuilder("/ugreen/v1/verify/logout", token, authType).build())
+                .url(urlBuilder(UgreenEndpoints.VERIFY_LOGOUT, token, authType).build())
                 .post(ByteArray(0).toRequestBody(null))
                 .desktopHeaders(baseUrl)
                 .build()
@@ -329,7 +368,8 @@ class UgreenApi(
 
     companion object {
         const val DESKTOP_UA =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
         fun Request.Builder.desktopHeaders(baseUrl: String): Request.Builder = apply {

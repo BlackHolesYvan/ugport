@@ -51,6 +51,7 @@ import com.ugport.ui.components.ConfirmDialog
 import com.ugport.ui.components.GlassDialog
 import com.ugport.ui.components.PlainField
 import com.ugport.ui.theme.UgPortTheme
+import com.ugport.ui.web.WebScreen
 import com.ugport.ui.theme.applyApplicationNightMode
 
 sealed interface Screen {

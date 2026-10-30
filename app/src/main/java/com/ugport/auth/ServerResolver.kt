@@ -2,6 +2,7 @@ package com.ugport.auth
 
 import com.ugport.network.Diagnostics
 import com.ugport.network.UgreenApi
+import com.ugport.network.UgreenEndpoints
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -18,9 +19,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * 通过连接标识（alias，例如 my-nas）解析当前服务器标识。
- * 实测接口：POST https://api.ugnas.com/api/p2p/v2/ta/nodeInfo/byAlias
- * 返回 relayDomain=xx.ug.link、dockerDomain=xx.ugdocker.link。
+ * 通过连接标识（alias，例如 `my-nas`）解析当前服务器域名。
+ *
+ * 接口：`POST https://api.ugnas.com/api/p2p/v2/ta/nodeInfo/byAlias`，
+ * 返回 `relayDomain=xx.ug.link`、`dockerDomain=xx.ugdocker.link`。
+ *
+ * 主机按 [UgreenEndpoints.RESOLVER_HOSTS] 顺序尝试，全部失败时返回最后一次结果，
+ * 由调用方决定是否回退到本地保存的域名。
  */
 class ServerResolver(
     private val client: OkHttpClient,
@@ -38,16 +43,16 @@ class ServerResolver(
             .toString()
             .toRequestBody(JSON)
         var last = Resolved(null, null, -1, "解析失败")
-        for (host in HOSTS) {
+        for (host in UgreenEndpoints.RESOLVER_HOSTS) {
             val request = Request.Builder()
-                .url("https://$host/api/p2p/v2/ta/nodeInfo/byAlias")
+                .url("https://$host${UgreenEndpoints.RESOLVER_PATH}")
                 .post(body)
                 .header("Content-Type", "application/json")
                 .header("User-Agent", UgreenApi.DESKTOP_UA)
                 .header("UG-Agent", "PC/WEB")
                 .header("lang", "zh-CN")
-                .header("Origin", "https://www.ug.link")
-                .header("Referer", "https://www.ug.link/")
+                .header("Origin", UgreenEndpoints.PORTAL_ORIGIN)
+                .header("Referer", UgreenEndpoints.PORTAL_REFERER)
                 .build()
             val result = runCatching {
                 client.newCall(request).execute().use { response ->
@@ -65,9 +70,9 @@ class ServerResolver(
             }.getOrElse {
                 Resolved(null, null, -1, it.message ?: "网络错误")
             }
-            diagnostics.log(
-                "resolve alias=$connectionId host=$host code=${result.code} " +
-                    "relay=${result.relayDomain} docker=${result.dockerDomain}"
+            diagnostics.log("resolve: host=$host code=${result.code}")
+            diagnostics.detail(
+                "resolve: alias=$connectionId relay=${result.relayDomain} docker=${result.dockerDomain}"
             )
             if (result.code == 200 &&
                 !result.relayDomain.isNullOrBlank() &&
@@ -81,7 +86,6 @@ class ServerResolver(
     }
 
     private companion object {
-        val HOSTS = listOf("api.ugnas.com", "api-zh.ugnas.com")
         val JSON = "application/json; charset=utf-8".toMediaType()
         val json = Json { ignoreUnknownKeys = true; isLenient = true }
     }

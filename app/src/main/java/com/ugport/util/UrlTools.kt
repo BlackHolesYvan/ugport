@@ -4,7 +4,11 @@ import android.net.Uri
 import com.ugport.data.model.NasProfile
 import java.net.URI
 
+/** 绿联 NAS 地址与连接标识的解析、拼接。所有函数都是纯函数，不发起网络请求。 */
 object UrlTools {
+
+    private const val RELAY_SUFFIX = "ug.link"
+    private const val DOCKER_SUFFIX = "ugdocker.link"
 
     /** 只保留连接标识，例如 https://my-nas.xx.ug.link/ -> my-nas */
     fun normalizeConnectionId(input: String): String {
@@ -25,7 +29,7 @@ object UrlTools {
         if (baseUrl.isBlank()) return null
         val host = runCatching { Uri.parse(normalizeBaseUrl(baseUrl)).host }.getOrNull() ?: return null
         val parts = host.split('.')
-        if (parts.size >= 3 && parts.takeLast(2) == listOf("ug", "link")) {
+        if (parts.size >= 3 && parts.takeLast(2) == RELAY_SUFFIX.split('.')) {
             return parts.drop(1).joinToString(".")
         }
         return null
@@ -33,7 +37,7 @@ object UrlTools {
 
     fun buildLoginBaseUrl(connectionId: String, relayDomain: String?): String =
         if (!relayDomain.isNullOrBlank()) "https://$connectionId.$relayDomain"
-        else "https://$connectionId.ug.link"
+        else "https://$connectionId.$RELAY_SUFFIX"
 
     fun normalizePath(path: String): String {
         val value = path.trim()
@@ -89,7 +93,7 @@ object UrlTools {
 
     fun isDockerGatewayUrl(url: String): Boolean {
         val host = runCatching { Uri.parse(normalizeTargetUrl(url)).host }.getOrNull() ?: return false
-        return host.startsWith("app-") && host.endsWith(".ugdocker.link")
+        return host.startsWith("app-") && host.endsWith(".$DOCKER_SUFFIX")
     }
 
     /** NAS 的 UGOS 登录域名，例如 my-nas.xx.ug.link。 */
@@ -112,10 +116,10 @@ object UrlTools {
         if (url.isNullOrBlank()) return false
         val uri = runCatching { URI(normalizeTargetUrl(url)) }.getOrNull() ?: return false
         val host = uri.host?.lowercase() ?: return false
-        if (host.endsWith(".ugdocker.link")) return false
+        if (host.endsWith(".$DOCKER_SUFFIX")) return false
         if (!loginHost.isNullOrBlank()) {
             if (!host.equals(loginHost.lowercase())) return false
-        } else if (!host.endsWith(".ug.link")) {
+        } else if (!host.endsWith(".$RELAY_SUFFIX")) {
             return false
         }
         val path = uri.path?.lowercase().orEmpty()
@@ -127,6 +131,6 @@ object UrlTools {
 
     fun defaultAppendUid(url: String): Boolean {
         val host = runCatching { Uri.parse(normalizeTargetUrl(url)).host }.getOrNull() ?: return false
-        return host.endsWith(".ugdocker.link") || host.endsWith(".ug.link")
+        return host.endsWith(".$DOCKER_SUFFIX") || host.endsWith(".$RELAY_SUFFIX")
     }
 }
