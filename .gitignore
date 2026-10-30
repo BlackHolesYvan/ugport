@@ -1,16 +1,37 @@
-*.iml
+# 构建产物
+build/
+app/build/
 .gradle/
 .kotlin/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+artifacts/
+dist/
+
+# 本机配置与签名材料
 local.properties
 keystore.properties
 *.jks
 *.keystore
-.idea/
-build/
-captures/
-.externalNativeBuild/
-.cxx/
+*.p12
+*.pfx
+
+# 抓包、日志与临时文件
 har/
+captures/
+*.har
+*.log
+*.hprof
 .private/
-dist/
-*.apk
+*.swp
+*~
+
+# IDE 与系统文件
+.idea/
+*.iml
+.vscode/
+.fleet/
+.DS_Store
+Thumbs.db

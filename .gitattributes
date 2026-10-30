@@ -1,0 +1,15 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.jar binary
+*.apk binary
+*.aab binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.webp binary
+
+gradle/wrapper/gradle-wrapper.jar binary linguist-vendored
+tools/*.py linguist-language=Python
