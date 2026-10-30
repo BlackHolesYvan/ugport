@@ -66,9 +66,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewCompat
+import com.ugport.R
 import com.ugport.media.PlaybackHub
 import com.ugport.media.WebMediaController
 import com.ugport.network.HttpFactory
@@ -132,6 +134,7 @@ fun WebScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val appName = stringResource(R.string.app_name)
     val activity = LocalActivity.current ?: context.findActivity()
     val fullscreenHost = remember(activity, viewModel.diagnostics) {
         WebFullscreenHost(activity, viewModel.diagnostics)
@@ -1131,9 +1134,9 @@ fun WebScreen(
     if (showBatteryDialog) {
         ConfirmDialog(
             title = "后台播放保护",
-            message = "为了避免锁屏或切到后台后被系统中断，建议允许绿联快连忽略电池优化。\n\n" +
-                "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；" +
-                "最近任务界面下拉应用卡片可锁定后台。",
+            message = "为了避免锁屏或切到后台后被系统中断，建议允许 " + appName +
+                " 忽略电池优化。\n\n部分国产系统还需要：设置 → 应用设置 → " + appName +
+                " → 省电策略 → 无限制，并允许自启动；最近任务界面下拉应用卡片可锁定后台。",
             confirmText = "去设置",
             dismissText = "以后再说",
             onConfirm = {
@@ -1148,7 +1151,7 @@ fun WebScreen(
         ConfirmDialog(
             title = "后台播放被系统打断",
             message = "系统回收了网页进程，播放会中断。\n\n" +
-                "建议在最近任务界面下拉绿联快连的卡片锁定后台，" +
+                "建议在最近任务界面下拉 " + appName + " 的卡片锁定后台，" +
                 "并确认省电策略为「无限制」、允许自启动。",
             confirmText = "去应用详情",
             dismissText = "知道了",

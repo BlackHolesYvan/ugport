@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">绿联快连</string>
+    <string name="app_name">UgPort</string>
+    <string name="app_name_full">UgPort · NAS 端口快连</string>
+    <string name="exit_confirm_message">确定要退出 %1$s 吗？</string>
     <string name="notification_channel_playback">网页音频播放</string>
     <string name="notification_channel_playback_desc">显示网页音频的播放控制</string>
     <string name="notification_unknown_track">网页音频</string>

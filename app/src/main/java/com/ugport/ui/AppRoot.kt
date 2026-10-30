@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -43,6 +44,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ugport.R
 import com.ugport.data.model.ThemeMode
 import com.ugport.di.AppContainer
 import com.ugport.ui.components.AmbientBackground
@@ -262,7 +264,7 @@ fun AppRoot(container: AppContainer) {
             if (showExitDialog) {
                 ConfirmDialog(
                     title = "退出应用",
-                    message = "确定要退出绿联快连吗？",
+                    message = stringResource(R.string.exit_confirm_message, stringResource(R.string.app_name)),
                     confirmText = "退出",
                     onConfirm = {
                         showExitDialog = false

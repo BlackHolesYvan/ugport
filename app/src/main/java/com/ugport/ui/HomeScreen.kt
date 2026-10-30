@@ -44,7 +44,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.ugport.R
 import com.ugport.data.model.AppData
 import com.ugport.data.model.NasProfile
 import com.ugport.data.model.Shortcut
@@ -108,7 +110,7 @@ fun HomeScreen(
     UgScaffold(
         topBar = {
             UgTopBar(
-                title = "绿联快连",
+                title = stringResource(R.string.app_name),
                 elevated = collapsed,
                 actions = {
                     IconButton(onClick = onManageNas) {

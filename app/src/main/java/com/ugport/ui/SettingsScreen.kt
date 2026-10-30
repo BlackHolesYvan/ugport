@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,6 +43,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ugport.BuildConfig
+import com.ugport.R
 import com.ugport.data.model.AppData
 import com.ugport.data.model.NasProfile
 import com.ugport.data.model.ThemeMode
@@ -172,8 +174,9 @@ fun SettingsScreen(
             item {
                 SectionCard(
                     title = "后台播放",
-                    footer = "部分国产系统还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，" +
-                        "并允许自启动；最近任务可下拉锁定。",
+                    footer = "部分国产系统还需要：设置 → 应用设置 → " +
+                        stringResource(R.string.app_name) +
+                        " → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
                 ) {
                     SettingRow(
                         title = if (ignoringBattery) "已允许后台运行" else "未允许后台运行",
@@ -203,7 +206,7 @@ fun SettingsScreen(
                 SectionCard(title = "关于") {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         Text(
-                            text = "绿联快连 " + BuildConfig.VERSION_NAME,
+                            text = stringResource(R.string.app_name_full) + " " + BuildConfig.VERSION_NAME,
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
