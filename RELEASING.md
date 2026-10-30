@@ -70,7 +70,7 @@ export UGPORT_KEY_PASSWORD='...'
 7. **推送**
 
    ```bash
-   git push origin master
+   git push origin main
    git push origin v0.5.0
    ```
 
