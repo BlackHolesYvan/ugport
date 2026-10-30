@@ -29,6 +29,7 @@ UgPort 是一个 Android 客户端，用来在手机上直接打开绿联云 NAS
 - Android 8.0（API 26）及以上
 - 使用系统 WebView，不内置浏览器内核
 - 不限制 NAS 型号；支持 Docker 端口与网关（browserUrl）端口
+- 界面文案目前只有中文（README 提供中英双语）
 
 ## 下载与安装
 

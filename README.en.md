@@ -40,6 +40,7 @@ the page to the system WebView.
 - Android 8.0 (API 26) and later
 - Uses the system WebView; no bundled browser engine
 - No NAS model restriction; supports Docker ports and gateway (browserUrl) ports
+- The in-app UI is currently Chinese only (this README is bilingual)
 
 ## Download and install
 
