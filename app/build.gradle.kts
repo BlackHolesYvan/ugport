@@ -8,10 +8,27 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// 签名信息优先读环境变量，其次读仓库根目录的 keystore.properties（已被 .gitignore 忽略）。
+// 四个值齐全才会创建 release 签名配置，避免静默产出未签名包。
+fun envOrNull(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+
+val signingStoreFile = envOrNull("UGPORT_KEYSTORE_FILE") ?: keystoreProps.getProperty("storeFile")
+val signingStorePassword =
+    envOrNull("UGPORT_KEYSTORE_PASSWORD") ?: keystoreProps.getProperty("storePassword")
+val signingKeyAlias = envOrNull("UGPORT_KEY_ALIAS") ?: keystoreProps.getProperty("keyAlias")
+val signingKeyPassword =
+    envOrNull("UGPORT_KEY_PASSWORD") ?: keystoreProps.getProperty("keyPassword")
+val hasSigningConfig = listOf(
+    signingStoreFile,
+    signingStorePassword,
+    signingKeyAlias,
+    signingKeyPassword,
+).all { !it.isNullOrBlank() }
 
 android {
     namespace = "com.ugport"
@@ -22,19 +39,19 @@ android {
         applicationId = "com.ugport"
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "0.4.7"
+        versionCode = 27
+        versionName = "0.5.0"
         // 应用与 AndroidX 仅保留中英文资源
         resourceConfigurations += listOf("zh", "en")
     }
 
     signingConfigs {
-        if (keystoreProps.getProperty("storeFile") != null) {
+        if (hasSigningConfig) {
             create("release") {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
+                storeFile = rootProject.file(signingStoreFile!!)
+                storePassword = signingStorePassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
             }
         }
     }
@@ -48,8 +65,10 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (keystoreProps.getProperty("storeFile") != null) {
+            if (hasSigningConfig) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn("UGPORT: 未找到签名配置，release 产物不会被签名")
             }
         }
     }
