@@ -8,6 +8,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * 内存诊断日志，最多保留 [MAX_LINES] 行，只在进程内，不落盘。
+ *
+ * 分层约定：
+ * - [event]：关键节点，会出现在设置页并能被用户复制。只写可公开分享的信息
+ *   （状态、错误码、端口、NAS id 前 8 位），不要写账号与完整 URL。
+ * - [detail]：高频细节，只写 logcat。可以包含 host、URL，但不得包含密码与明文 token。
+ */
 class Diagnostics {
 
     private val lock = Any()
@@ -37,10 +45,17 @@ class Diagnostics {
         synchronized(lock) { _lines.value = emptyList() }
     }
 
-    fun redactUrl(url: String): String =
-        Regex("([?&](?:token|uid|ugk|code|key|sign)=)[^&\"'\\s]+").replace(url) {
-            it.groupValues[1] + "***"
-        }
+    /**
+     * 脱敏后的 URL 可以展示或复制：
+     * - userinfo 部分（`https://user:pass@host`）替换为 `***@`
+     * - query 中的 token/uid/ugk/code/key/sign 替换为 `***`
+     *
+     * host、路径与端口仍会保留，它们可能暴露 NAS 域名，因此完整 URL 只应写进 [detail]。
+     */
+    fun redactUrl(url: String): String {
+        val withoutUserInfo = USER_INFO.replace(url) { it.groupValues[1] + "***@" }
+        return SENSITIVE_QUERY.replace(withoutUserInfo) { it.groupValues[1] + "***" }
+    }
 
     fun maskToken(token: String?): String {
         if (token.isNullOrEmpty()) return "<none>"
@@ -51,5 +66,7 @@ class Diagnostics {
     private companion object {
         const val MAX_LINES = 200
         const val DEFAULT_TAG = "UgPort"
+        val USER_INFO = Regex("(://)[^/@\\s]+@")
+        val SENSITIVE_QUERY = Regex("([?&](?:token|uid|ugk|code|key|sign)=)[^&\"'\\s]+")
     }
 }

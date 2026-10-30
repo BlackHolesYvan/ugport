@@ -183,7 +183,7 @@ object MediaHookScript {
           function skipButton(el, dir) {
             if (!el || !el.isConnected) return null;
             var scope = el.parentElement || document;
-            // Ting Reader：播放按钮 aria-label="player.play"，其父级就是 skip 控制组
+            // 部分听书页面：播放按钮 aria-label="player.play"，其父级就是 skip 控制组
             var play;
             try { play = scope.querySelector('button[aria-label^="player."]'); } catch (e) { play = null; }
             if (play && play.parentElement) {

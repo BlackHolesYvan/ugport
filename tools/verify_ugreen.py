@@ -3,8 +3,8 @@
 用真实会话验证绿联 NAS 的登录态、GetUid 与端口 uid 拼接。
 
 用法：
-  python3 tools/verify_ugreen.py --token <明文token> --base https://xxx.ug.link --port-url https://app-23003-xxx.ugdocker.link
-  python3 tools/verify_ugreen.py --har har/xxx.har --port-url https://app-23003-xxx.ugdocker.link
+  python3 tools/verify_ugreen.py --token <明文token> --base https://xxx.ug.link --port-url https://app-8080-xxx.ugdocker.link
+  python3 tools/verify_ugreen.py --har har/xxx.har --port-url https://app-8080-xxx.ugdocker.link
 
 HAR 模式会从最新的 code/login 或 login 响应里读取 data.token。
 注意：HAR 里的 token 可能已经过期（服务端一般返回 code 1024）。
@@ -21,6 +21,7 @@ import urllib.request
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+# 绿联 Web 客户端使用的公开标识，不是个人账号凭据。
 CLIENT_ID = "7a2466ca-1b98-40a7-ae67-WEB"
 
 

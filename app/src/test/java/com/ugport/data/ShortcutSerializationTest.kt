@@ -17,7 +17,7 @@ class ShortcutSerializationTest {
 
     @Test
     fun oldShortcutDefaultsToMobilePage() {
-        val old = """{"id":"s1","nasId":"n1","name":"qBittorrent","port":20180,"path":"","url":"","appendUid":true}"""
+        val old = """{"id":"s1","nasId":"n1","name":"qBittorrent","port":9090,"path":"","url":"","appendUid":true}"""
         val decoded = json.decodeFromString<Shortcut>(old)
         assertFalse(decoded.desktopUa)
         assertFalse(decoded.allowBackground)
@@ -29,7 +29,7 @@ class ShortcutSerializationTest {
             id = "s1",
             nasId = "n1",
             name = "qBittorrent",
-            port = 20180,
+            port = 9090,
             desktopUa = true,
         )
         val decoded = json.decodeFromString<Shortcut>(json.encodeToString(shortcut))
@@ -42,7 +42,7 @@ class ShortcutSerializationTest {
             id = "s1",
             nasId = "n1",
             name = "qBittorrent",
-            port = 20180,
+            port = 9090,
             allowBackground = false,
         )
         val decoded = json.decodeFromString<Shortcut>(json.encodeToString(shortcut))
@@ -54,8 +54,8 @@ class ShortcutSerializationTest {
         val shortcut = Shortcut(
             id = "s1",
             nasId = "n1",
-            name = "Ting Reader",
-            port = 20260,
+            name = "Test Reader",
+            port = 8080,
             allowBackground = true,
         )
         val decoded = json.decodeFromString<Shortcut>(json.encodeToString(shortcut))

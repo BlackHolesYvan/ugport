@@ -77,7 +77,7 @@ object UrlTools {
         }.getOrDefault(url)
     }
 
-    /** 从 app-23003-xxxx.ugdocker.link 这类地址中取出 23003。 */
+    /** 从 app-8080-xxxx.ugdocker.link 这类地址中取出 8080。 */
     fun extractAppPort(url: String): Int? {
         val uri = runCatching { Uri.parse(normalizeTargetUrl(url)) }.getOrNull() ?: return null
         val host = uri.host ?: return null

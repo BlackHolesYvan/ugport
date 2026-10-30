@@ -14,6 +14,15 @@ sealed interface SessionResult {
     data class Failure(val message: String) : SessionResult
 }
 
+/**
+ * 单台 NAS 的登录会话管理。
+ *
+ * token 语义：登录返回的 keepalive token 可以长期复用，因此只要有内存或本地缓存就直接使用，
+ * 不再每次打开端口都调用 is_login；只有接口返回 1024/1010/401，或页面落到登录页时才强制重新授权。
+ *
+ * 并发：每台 NAS 一把 [Mutex]，避免同时打开多个端口时重复登录。
+ * 失败策略：连续失败 [MAX_FAILURES] 次后冷却 [COOLDOWN_MS]，避免把账号刷进风控。
+ */
 class SessionManager(
     private val repo: ProfileRepository,
     private val apiFactory: (String) -> UgreenApi,
@@ -36,13 +45,13 @@ class SessionManager(
             // 不再每次打开端口都调用 is_login 校验；只有接口返回 1024 或页面跳到登录页时才重新授权。
             if (!force) {
                 tokenCache[nasId]?.let {
-                    diagnostics.log("session: use memory token (${nas.name})")
+                    diagnostics.log("session: use memory token (nas=${nasId.take(8)})")
                     return@withLock SessionResult.Success(it.token, nas.authType)
                 }
                 val stored = repo.tokenOf(nas)
                 if (!stored.isNullOrBlank()) {
                     tokenCache[nasId] = CachedToken(stored, System.currentTimeMillis())
-                    diagnostics.log("session: use stored keepalive token (${nas.name})")
+                    diagnostics.log("session: use stored keepalive token (nas=${nasId.take(8)})")
                     return@withLock SessionResult.Success(stored, nas.authType)
                 }
             }
@@ -63,14 +72,16 @@ class SessionManager(
                 return@withLock SessionResult.Failure("未保存密码，请编辑 NAS 配置")
             }
 
-            diagnostics.log("session: login as ${nas.username}@${endpoints.loginBaseUrl}")
+            diagnostics.log("session: login start (nas=${nasId.take(8)})")
+            diagnostics.detail("session: login host=${endpoints.loginBaseUrl} user=${nas.username}")
             var result = api.login(nas.username, password)
 
             // 服务器标识可能已变化：登录失败时强制重新解析一次
             if (result.token.isNullOrBlank() && !result.enableOtp) {
                 val fresh = endpointResolver.resolve(nasId, force = true)
                 if (fresh != null && fresh.loginBaseUrl != endpoints.loginBaseUrl) {
-                    diagnostics.log("session: server changed, retry via ${fresh.loginBaseUrl}")
+                    diagnostics.log("session: server changed, retry once")
+                    diagnostics.detail("session: retry host=${fresh.loginBaseUrl}")
                     api = apiFactory(fresh.loginBaseUrl)
                     result = api.login(nas.username, password)
                 }
@@ -81,11 +92,11 @@ class SessionManager(
                 tokenCache[nasId] = CachedToken(result.token!!, System.currentTimeMillis())
                 failureCount.remove(nasId)
                 cooldownUntil.remove(nasId)
-                diagnostics.log("session: login ok (${nas.name})")
+                diagnostics.log("session: login ok (nas=${nasId.take(8)})")
                 return@withLock SessionResult.Success(result.token, result.authType)
             }
             if (result.enableOtp) {
-                diagnostics.log("session: otp required (${nas.name})")
+                diagnostics.log("session: otp required (nas=${nasId.take(8)})")
                 return@withLock SessionResult.OtpRequired(result.tokenId, result.otpType)
             }
 
@@ -124,7 +135,7 @@ class SessionManager(
         tokenCache[nasId] = CachedToken(token, System.currentTimeMillis())
         failureCount.remove(nasId)
         cooldownUntil.remove(nasId)
-        diagnostics.log("session: accepted token from webview (${nas.name})")
+        diagnostics.log("session: accepted token from webview (nas=${nasId.take(8)})")
         return SessionResult.Success(token, nas.authType)
     }
 

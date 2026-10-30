@@ -13,6 +13,19 @@ sealed interface OpenResult {
     data class Error(val message: String) : OpenResult
 }
 
+/**
+ * 把端口配置解析成 WebView 可以直接加载的地址。
+ *
+ * 两条路径：
+ * - Docker 容器端口：`GET dockerToken` 拿到一次性 redirect_url。必须先用原生请求访问它，
+ *   取出 `ugreen-proxy-token` 写入 CookieManager，再加载
+ *   `app-<port>-<alias>.<dockerDomain>`。redirect_url 只能使用一次，而且会 302 到 `/`，
+ *   所以不能把它交给 WebView 预加载，否则会与原生 Cookie 交换竞争。
+ * - 网关端口（browserUrl）：`GET GetUid` 取 uid，拼到目标地址上。
+ *
+ * token 失效时自动重新授权一次。重授权只清内存缓存，持久化 token 保留到新 token 成功后再覆盖，
+ * 避免一次网络失败就把长期 token 丢掉。
+ */
 class ShortcutOpener(
     private val repo: ProfileRepository,
     private val sessions: SessionManager,
@@ -119,7 +132,8 @@ class ShortcutOpener(
             }
         }
 
-        diagnostics.log("open: ${shortcut.name} -> ${redact(finalUrl)}")
+        diagnostics.log("open: ready (port=${port ?: 0})")
+        diagnostics.detail("open: ${shortcut.name} -> ${redact(finalUrl)}")
         return OpenResult.Ready(finalUrl)
     }
 

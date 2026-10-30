@@ -18,15 +18,15 @@ class AppDataMigrationTest {
                 Shortcut(
                     id = "s1",
                     nasId = "n1",
-                    name = "Ting Reader",
-                    port = 20260,
+                    name = "Test Reader",
+                    port = 8080,
                     allowBackground = true,
                 ),
                 Shortcut(
                     id = "s2",
                     nasId = "n1",
                     name = "qBittorrent",
-                    port = 20180,
+                    port = 9090,
                     allowBackground = true,
                 ),
             ),
@@ -46,8 +46,8 @@ class AppDataMigrationTest {
                 Shortcut(
                     id = "s1",
                     nasId = "n1",
-                    name = "Ting Reader",
-                    port = 20260,
+                    name = "Test Reader",
+                    port = 8080,
                     allowBackground = true,
                 ),
             ),
@@ -64,7 +64,7 @@ class AppDataMigrationTest {
         val data = AppData(
             schema = 2,
             shortcuts = listOf(
-                Shortcut(id = "s1", nasId = "n1", name = "qBittorrent", port = 20180),
+                Shortcut(id = "s1", nasId = "n1", name = "qBittorrent", port = 9090),
             ),
         )
 

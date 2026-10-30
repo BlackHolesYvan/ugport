@@ -13,8 +13,14 @@ data class NasEndpoints(
 )
 
 /**
- * 负责把「连接标识」解析成当前服务器域名，并做短时缓存。
- * 服务器标识会变，所以缓存 10 分钟；登录失败时会强制重新解析。
+ * 把「连接标识」解析成当前服务器域名。
+ *
+ * 双层缓存：
+ * - 内存 [cache]：TTL [TTL_MS]（30 分钟），避免频繁请求 nodeInfo。
+ * - 落盘的 relayDomain/dockerDomain：与 `resolvedAt` 一起判断，同样 30 分钟。
+ *
+ * 服务器标识可能变化，所以登录失败或 dockerToken 失败时会 `force = true` 重新解析；
+ * 解析失败则回退到上次成功保存的域名，保证离线/接口抖动时仍能打开已配置的端口。
  */
 class EndpointResolver(
     private val repo: ProfileRepository,
@@ -76,7 +82,8 @@ class EndpointResolver(
 
         // 解析失败时优先沿用上次成功的服务器标识
         if (!storedRelay.isNullOrBlank() && !storedDocker.isNullOrBlank()) {
-            diagnostics.log("resolve fallback to stored domains for $connectionId")
+            diagnostics.log("resolve: fallback to stored domains (nas=${nasId.take(8)})")
+            diagnostics.detail("resolve: fallback connection=$connectionId")
             return NasEndpoints(
                 connectionId = connectionId,
                 relayDomain = storedRelay,
@@ -85,7 +92,8 @@ class EndpointResolver(
             ).also { cache[nasId] = Cached(it, now) }
         }
 
-        diagnostics.log("resolve failed for $connectionId: ${resolved.code} ${resolved.message}")
+        diagnostics.log("resolve: failed (nas=${nasId.take(8)}, code=${resolved.code})")
+        diagnostics.detail("resolve: failed connection=$connectionId message=${resolved.message}")
         return null
     }
 

@@ -88,8 +88,10 @@ fun SettingsScreen(
     }
 
     fun copyLogs() {
-        val header = "绿联快连 " + BuildConfig.VERSION_NAME + "\n" +
-            "Android " + android.os.Build.VERSION.RELEASE + " / " + android.os.Build.MODEL + "\n"
+        // 头信息只放版本与系统版本；设备型号、账号等都不进剪贴板。
+        val header = "UgPort " + BuildConfig.VERSION_NAME + "\n" +
+            "Android " + android.os.Build.VERSION.RELEASE +
+            " (SDK " + android.os.Build.VERSION.SDK_INT + ")\n"
         val text = header + lines.joinToString("\n")
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("UgPort 诊断日志", text))
@@ -170,7 +172,7 @@ fun SettingsScreen(
             item {
                 SectionCard(
                     title = "后台播放",
-                    footer = "小米/红米还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
+                    footer = "部分国产系统还需要：设置 → 应用设置 → 绿联快连 → 省电策略 → 无限制，并允许自启动；最近任务可下拉锁定。",
                 ) {
                     SettingRow(
                         title = if (ignoringBattery) "已允许后台运行" else "未允许后台运行",
@@ -279,7 +281,10 @@ private fun DiagnosticsLogCard(
     onCopy: () -> Unit,
     onClear: () -> Unit,
 ) {
-    SectionCard(title = "诊断日志 · " + count + " 条") {
+    SectionCard(
+        title = "诊断日志 · " + count + " 条",
+        footer = "日志可能包含 NAS 域名与端口，分享到 issue 前请先检查。",
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

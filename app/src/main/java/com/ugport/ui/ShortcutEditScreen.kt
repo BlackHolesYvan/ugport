@@ -144,7 +144,7 @@ fun ShortcutEditScreen(
                     value = port,
                     onValueChange = { input -> port = input.filter(Char::isDigit).take(5) },
                     label = "端口号",
-                    placeholder = "23003",
+                    placeholder = "8080",
                     keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Next,
                 )

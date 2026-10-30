@@ -9,9 +9,9 @@ class DiagnosticsTest {
 
     @Test
     fun redactsSensitiveQueryParameters() {
-        val url = "https://nas/ugreen/v1/x?token=abc&uid=u1&ugk=k&code=c&key=k2&sign=s&port=20260#frag"
+        val url = "https://nas/ugreen/v1/x?token=abc&uid=u1&ugk=k&code=c&key=k2&sign=s&port=8080#frag"
         assertEquals(
-            "https://nas/ugreen/v1/x?token=***&uid=***&ugk=***&code=***&key=***&sign=***&port=20260#frag",
+            "https://nas/ugreen/v1/x?token=***&uid=***&ugk=***&code=***&key=***&sign=***&port=8080#frag",
             diagnostics.redactUrl(url),
         )
     }
@@ -19,8 +19,8 @@ class DiagnosticsTest {
     @Test
     fun keepsNonSensitiveParameters() {
         assertEquals(
-            "https://nas/page?port=20260&path=%2Fpanel",
-            diagnostics.redactUrl("https://nas/page?port=20260&path=%2Fpanel"),
+            "https://nas/page?port=8080&path=%2Fpanel",
+            diagnostics.redactUrl("https://nas/page?port=8080&path=%2Fpanel"),
         )
     }
 
